@@ -26,6 +26,7 @@ import bitsandbytes as bnb  # Add this import
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import os
 from torch.utils.checkpoint import checkpoint
+from dotenv import load_dotenv
 
 torch.manual_seed(1337)
 torch.cuda.manual_seed(1337)
@@ -62,7 +63,9 @@ torch.cuda.set_device('cuda:0')
 # filtered_lines = [line for line in text if line != '']
 # print(len(filtered_lines))
 # use name="sample-10BT" to use the 10BT sample
-TOKEN = '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'
+load_dotenv()
+
+TOKEN = os.getenv('HF_TOKEN')
 tinystories = False
 fw = True
 fw_train = None

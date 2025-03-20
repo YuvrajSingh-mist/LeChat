@@ -4,7 +4,7 @@ from datasets import load_dataset
 from transformers import PreTrainedTokenizerFast
 
 # --- Configuration ---
-TOKEN = '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'
+TOKEN = '...'
 DATASET_NAME = "HuggingFaceFW/fineweb"
 DATASET_CONFIG = "sample-10BT"  # adjust if needed
 TRAIN_SPLIT = "train"
