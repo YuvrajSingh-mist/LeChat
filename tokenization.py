@@ -2,9 +2,10 @@ import os
 import sentencepiece as spm
 from datasets import load_dataset
 from transformers import PreTrainedTokenizerFast
+from dotenv import load_dotenv
 
 # --- Configuration ---
-TOKEN = '...'
+TOKEN = os.getenv('HF_TOKEN')
 DATASET_NAME = "HuggingFaceFW/fineweb"
 DATASET_CONFIG = "sample-10BT"  # adjust if needed
 TRAIN_SPLIT = "train"
@@ -44,7 +45,7 @@ spm.SentencePieceTrainer.train(
     character_coverage=1.0,
     pad_id=0, unk_id=1, bos_id=2, eos_id=3,
     input_sentence_size=25000000,  # Limit the number of sentences used
-    shuffle_input_sentence=True    # Shuffle sentences to get a representative sample
+    shuffle_input_sentence=True,    # Shuffle sentences to get a representative sample
     user_defined_symbols=["[PAD]", "[UNK]", "[BOS]", "[EOS]"]
 )
 print("Tokenizer training completed.")
