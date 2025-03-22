@@ -66,20 +66,20 @@ torch.cuda.set_device('cuda:0')
 load_dotenv()
 
 TOKEN = os.getenv('HF_TOKEN')
-tinystories = False
-fw = True
+tinystories = True
+fw = False
 fw_train = None
 fw_test = None
-if(tinystories):
-    fw_train = load_dataset("roneneldan/TinyStories", split="train")
-    fw_test = load_dataset("roneneldan/TinyStories", split="validation")
-    print(fw_train)
-    print(fw_test)
-if(fw):   
-    fw_train = load_dataset("HuggingFaceFW/fineweb", name="sample-10BT", split="train", streaming=False, token=TOKEN)
-    fw_train = fw_train.train_test_split(test_size=0.01)
-    # print(fw_train)
-    print(fw_train)
+# if(tinystories):
+#     fw_train = load_dataset("roneneldan/TinyStories", split="train")
+#     fw_test = load_dataset("roneneldan/TinyStories", split="validation")
+#     print(fw_train)
+#     print(fw_test)
+# if(fw):   
+#     fw_train = load_dataset("HuggingFaceFW/fineweb", name="sample-10BT", split="train", streaming=True, token=TOKEN)
+#     fw_train = fw_train.train_test_split(test_size=0.01)
+#     # print(fw_train)
+#     print(fw_train)
 # Select only 1000 rows from the dataset
 # fw_train = fw_train.select(range(1000000))
 # alpaca = load_dataset("yahma/alpaca-cleaned", split='train')
@@ -92,6 +92,25 @@ if(fw):
 # fw_train = fw_train.train_test_split(test_size=0.01)
 # print(fw_train)
 
+# Load training data
+train_data = load_dataset(
+    "roneneldan/TinyStories",
+    split="train",
+    streaming=True,
+    token=TOKEN
+).shuffle(buffer_size=100000, seed=42)
+
+val_data = load_dataset(
+    "roneneldan/TinyStories",
+    split="validation",
+    streaming=True, 
+    token=TOKEN
+).shuffle(buffer_size=100000, seed=42)
+
+# Reserve first 1% (or fixed number) for validation
+# num_val_samples = 100000  # Adjust based on dataset size
+# val_data = train_stream.take(num_val_samples)
+# train_data = train_stream.skip(num_val_samples)
 
 # Access the splits
 # train_dataset = train_val_split['train']
@@ -124,7 +143,7 @@ class ModelArgs:
     dropout = 0.1
     # epochs = 100
     val_epochs = 2
-    max_lr = 6e-4
+    max_lr = 1e-5
     no_of_decoder_layers = 8 #IMP needs to be thoroughly calculated
     weight_decay_optim = 0.1
     beta_1 = 0.9
@@ -144,7 +163,7 @@ class ModelArgs:
 
 def _save_snapshot(model, optimizer, scheduler, epoch, step):
     snapshot = {
-        "MODEL_STATE": model.module.state_dict(),
+        "MODEL_STATE": model.state_dict(),
         "OPTIMIZER_STATE": optimizer.state_dict(),
         # "SCHEDULER_STATE": scheduler.state_dict(),  
         "EPOCHS_RUN": epoch,
@@ -187,8 +206,8 @@ tokenizer.add_special_tokens({'pad_token': '[PAD]'})
 def tokenize_function(examples):
     return tokenizer(
         examples['text'],
-        max_length=ModelArgs.block_size,
- padding='longest',  # Changed to dynamic padding
+        # max_length=ModelArgs.block_size,
+        padding='longest',  # Changed to dynamic padding
         truncation=True,
         return_overflowing_tokens=True,
         return_tensors='pt'
@@ -231,7 +250,7 @@ def prepare_dataset(split, device, batch_size):
         #     texts.append(instruction)
         #     outputs.append(output)
         # Tokenize text data
-        input_encodings = tokenizer(texts, max_length = ModelArgs.block_size, padding='max_length', truncation=True, return_tensors="pt")
+        input_encodings = tokenizer(texts, padding='max_length', max_length=ModelArgs.block_size, truncation=True, return_tensors="pt")
         # output_encodings = tokenizer(outputs, max_length = ModelArgs.block_size, padding='max_length', truncation=True, return_tensors="pt")
         # input_encodings["labels"] = tokenizer(outputs, max_length = ModelArgs.block_size, padding='max_length', truncation=True, return_tensors="pt")
         # out = {"input": input_encodings}
@@ -253,61 +272,61 @@ def prepare_dataset(split, device, batch_size):
     if(tinystories):
         if(split == 'train'):
             data_loader = DataLoader(
-            fw_train,
+            train_data,
             # generator=generator,
             batch_size=batch_size,
              
-            sampler=DistributedSampler(fw_train, shuffle=True),
+            # sampler=DistributedSampler(fw_train, shuffle=True),
             collate_fn=collate_fn,
             drop_last=True,
-            shuffle=False,
-             pin_memory=True,  # Add this
-            persistent_workers=True
+            # shuffle=True,
+            #  pin_memory=True,  # Add this
+            # persistent_workers=True
         )
         elif(split == 'val'):
             data_loader = DataLoader(
-            fw_test,
+            val_data,
               
             
             batch_size=batch_size,
-            sampler=DistributedSampler(fw_test, shuffle=True),
+            # sampler=DistributedSampler(fw_test, shuffle=True),
             collate_fn=collate_fn,
             drop_last=True,
-            shuffle=False, 
-            pin_memory=True,  # Add this
-            persistent_workers=True
+            # shuffle=True, 
+            # pin_memory=True,  # Add this
+            # persistent_workers=True
         )
     elif(fw):
         if(split == 'train'):
             data_loader = DataLoader(
-            fw_train['train'],
+            train_data,
             batch_size=batch_size,
             
             
-            sampler=DistributedSampler(fw_train['train'], shuffle=True),
+            # sampler=DistributedSampler(fw_train['train'], shuffle=True),
             collate_fn=collate_fn,
             drop_last=True,
-            shuffle=False,
+            # shuffle=True,
             # num_workers=os.cpu_count(),
-            num_workers = min(4, os.cpu_count()//2),  # Don't overallocate
-            prefetch_factor = 2,  # Balance memory/performance       
-            pin_memory=True,  # Add this
-            persistent_workers=True
+            # num_workers = min(4, os.cpu_count()//2),  # Don't overallocate
+            # prefetch_factor = 2,  # Balance memory/performance       
+            # pin_memory=True,  # Add this
+            # persistent_workers=True
     )
         elif(split == 'val'):
             data_loader = DataLoader(
-            fw_train['test'],
+            val_data,
             batch_size=batch_size,
                 # generator=generator,
-            sampler=DistributedSampler(fw_train["test"]),
+            # sampler=DistributedSampler(fw_train["test"]),
             collate_fn=collate_fn,
             # num_workers=os.cpu_count(),
-            num_workers = min(4, os.cpu_count()//2), # Don't overallocate
-            prefetch_factor = 2,  # Balance memory/performance
+            # num_workers = min(4, os.cpu_count()//2), # Don't overallocate
+            # prefetch_factor = 2,  # Balance memory/performance
             drop_last=True,
-            shuffle=False,
-            pin_memory=True,  # Add this
-            persistent_workers=True
+            # shuffle=True,
+            # pin_memory=True,  # Add this
+            # persistent_workers=True
         )
     return data_loader
 
@@ -377,9 +396,9 @@ class SWiGLUExpertMoE(nn.Module):
 
         # self.hidden_dims = int(2 * ( 4 * embeddings_dims) / 3)
         self.swish = Swish(block_size=block_size, embeddings_dims=embeddings_dims, device=device)
-        self.linear_layer1 = nn.Linear(in_features=embeddings_dims, out_features=embeddings_dims,  bias=False, device = device)
-        self.linear_layer2 = nn.Linear(in_features=embeddings_dims, out_features=embeddings_dims,  bias=False, device = device)
-        self.linear_layer3 = nn.Linear(in_features=embeddings_dims, out_features=embeddings_dims,  bias=False, device = device)
+        self.linear_layer1 = nn.Linear(in_features=embeddings_dims, out_features=embeddings_dims*2,  bias=False, device = device)
+        self.linear_layer2 = nn.Linear(in_features=embeddings_dims, out_features=embeddings_dims*2,  bias=False, device = device)
+        self.linear_layer3 = nn.Linear(in_features=embeddings_dims*2, out_features=embeddings_dims,  bias=False, device = device)
 
 
 
@@ -406,13 +425,21 @@ class MoeLayer(nn.Module):
 
         self.heads = nn.ModuleList([SWiGLUExpertMoE() for _ in range(ModelArgs.experts)])
         self.gate = nn.Linear(in_features=embeddings_size, out_features=ModelArgs.experts, device=device)
+        self.noise = nn.Linear(in_features=embeddings_size, out_features=ModelArgs.experts, device=device)
         # self.outputs = torch.zeros((batch_size,block_size, embeddings_size), device=device) #batch size needs to be defined because we are accessing it explicitly
-
+        self.device = device
     def forward(self, x):
         # mlp_weights_init = self.mlp.apply(weights_init)
         self.gate_out = self.gate(x) #[bz, seq, num_experts]
-        top_k_values, top_k_indices = torch.topk(self.gate_out, k=ModelArgs.top_experts) #[bs, seq len, top k]
+        noise = self.noise(x)
+        gaussian_noise = torch.normal(0, 1, size=self.gate_out.shape, device=self.device)
+        noisy_router = F.softplus(noise) * gaussian_noise
+        noisy_router += self.gate_out
+        top_k_values, top_k_indices = torch.topk(noisy_router, k=ModelArgs.top_experts) #[bs, seq len, top k]
         probs = torch.nn.functional.softmax(top_k_values, dim=-1) #[bs, seq len, top k]
+        #Softplus isn't really needed tbh, since its gaussian anyways
+
+
         #imp to add dim=-1 which specifies the softmax to be applied to the experts dim
         # print(top_k_indices[11])
         # print(top_k_values[20])
@@ -450,7 +477,7 @@ class MoeLayer(nn.Module):
             device=x.device, 
             dtype=x.dtype
         )
-       
+
         # Gather the outputs from the selected experts
         for expert_idx in range(ModelArgs.experts):
             expert_mask = (top_k_indices == expert_idx)  # Shape: (batch_size, seq_len, top_k)
@@ -572,7 +599,7 @@ class Mixtral(nn.Module):
         super().__init__()
 
         self.positional_embeddings = nn.Parameter(torch.randn(1, block_size, embeddings_dims, device=device), requires_grad=True) #To give positional embeddings to each token of the input text, hence num_embeddings=block_size
-        torch.nn.init.normal_(self.positional_embeddings, mean=0.0, std=0.02)
+        # torch.nn.init.normal_(self.positional_embeddings, mean=0.0, std=0.02)
         self.text_embds = TextEmbeddings(vocab_size=vocab_size, embeddings_dims=embeddings_dims, device=device)
         self.linear_layer = nn.Linear(in_features=embeddings_dims, out_features=vocab_size, device=device, bias=False) # Takes in logits of dimensions- embeds_dims and converts it into dimension of vocab_size (logits in range of vocab_size)
         # self.layer_norm = LayerNormalization(embeddings_dims=embeddings_dims)
@@ -605,7 +632,7 @@ def topk_sampling(model, prompt, device, max_length=50, top_k=50, temperature=1.
     ModelArgs.inference=True
     for _ in range(max_length):
         with torch.no_grad():
-            outputs = model.module(input_ids)
+            outputs = model(input_ids)
             logits = outputs[:, -1, :]
             
             probs = F.softmax(logits, dim=-1)
@@ -630,7 +657,7 @@ def topk_sampling(model, prompt, device, max_length=50, top_k=50, temperature=1.
     return tokenizer.decode(input_ids[0], skip_special_tokens=True)
 
 def beam_search(model, tokenizer, prompt, beam_width=5, max_length=50, temperature=1.0):
-    device = next(model.module.parameters()).device
+    device = next(model.parameters()).device
     input_ids = tokenizer(prompt, return_tensors="pt").to(device)['input_ids']
     beam_scores = torch.zeros(beam_width, device=device)
     beam_sequences = input_ids.repeat(beam_width, 1)
@@ -710,7 +737,7 @@ def greedy_decode(
     
     for _ in range(max_length):
         with torch.no_grad():
-            outputs = model.module(input_ids)
+            outputs = model(input_ids)
             logits = outputs[:, -1, :]  # Get logits for the last token
 
             # Apply temperature scaling
@@ -741,7 +768,7 @@ def greedy_decode(
 def save_to_file(text):
     
     with open('generations.txt', 'a') as f:
-        f.writelines(text + "\n\n")
+        f.write(text + "\n\n")
         
     
 #Train the  model
@@ -790,7 +817,7 @@ save_chechpoint_iter = 50
 total_iters = 20000
 eval_iters = 50
 eval_check = 100
-warmup_iters = 700
+warmup_iters = 1200
 min_lr = 0.1 * ModelArgs.max_lr
 lr_decay_iters = 20000
 total_batch_size = 524288
@@ -814,9 +841,9 @@ def get_lr(it):
 
 
 def train():
-    setup()
-    device = int(os.environ["LOCAL_RANK"])
-
+    # setup()
+    # device = int(os.environ["LOCAL_RANK"])
+    device = 0
     torch.cuda.set_device(int(device))
     # torch.set_default_device('cuda')
     # train_dataloader = prepare_dataset(ModelArgs.batch_size)
@@ -854,17 +881,18 @@ def train():
     # _load_snapshot('/kaggle/input/models/snapshot2.pt', model.module, None, None)
     # optimizer = optim.AdamW(model.parameters(), lr=ModelArgs.max_lr, betas=(ModelArgs.beta_1, ModelArgs.beta_2), weight_decay=ModelArgs.weight_decay_optim, eps=ModelArgs.eps)
      # Use 8-bit optimizer
-    optimizer = bnb.optim.Adam8bit(
+    optimizer = torch.optim.AdamW(
         model.parameters(), 
         lr=ModelArgs.max_lr, 
         betas=(ModelArgs.beta_1, ModelArgs.beta_2),
         weight_decay=ModelArgs.weight_decay_optim,
-        eps=ModelArgs.eps
+        eps=ModelArgs.eps,
+        
     )
     # model = torch.compile(model)
     model = model.to(device)
     
-    model = DDP(model, device_ids=[device])
+    # model = DDP(model, device_ids=[device])
     
 
     # new_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=25000, eta_min=1e-6) #with the prev optim snapshot
@@ -963,7 +991,7 @@ def train():
                     
                     logits = model(idx)
                     batch_size, block_size, embeddings_dims = logits.shape
-                    logits = logits.view(batch_size * block_size, embeddings_dims).to(torch.float16)  # Flatten tokens
+                    logits = logits.view(batch_size * block_size, embeddings_dims)
                     targets = targets.view(batch_size * block_size)
 
                     loss = F.cross_entropy(logits, targets, ignore_index=tokenizer.pad_token_id)
@@ -1010,8 +1038,8 @@ def train():
     train_data_iterator = iter(train_dataloader)
     val_data_iterator = iter(val_loader)
     token_count = 0
-    if(device == 0):
-        train_loader_length = len(train_dataloader)
+    # if(device == 0):
+        # train_loader_length = len(train_dataloader)
         # print("Total batches: ", train_loader_length)
     # print("Length of : ", len(train_dataloader))
     # print("Length of val: ", len(val_loader))
@@ -1026,7 +1054,7 @@ def train():
         #     if(step == train_loader_length):
         #       break
                 print("Step : ", step, "/", total_iters)
-                print('Total batches: ', len(train_dataloader))
+                # print('Total batches: ', len(train_dataloader))
                 print("Total gradient accumulation steps: ", gradient_accumulation_steps)
                 print("Total tokens processed: ", token_count)
                 
@@ -1047,13 +1075,13 @@ def train():
             # avg_train_loss = torch.Tensor([losses['train']]).to(device)
             avg_val_loss = torch.Tensor([losses['val']]).to(device)
             # torch.distributed.reduce(avg_train_loss, dst=0, op=torch.distributed.ReduceOp.SUM)
-            torch.distributed.reduce(avg_val_loss, dst=0, op=torch.distributed.ReduceOp.SUM)
+            # torch.distributed.reduce(avg_val_loss, dst=0, op=torch.distributed.ReduceOp.SUM)
             
             if device == 0:
                 # all_gpus_avg_train_loss = avg_train_loss / world_size
                 # print(f"All_GPUs_Train_losses: {all_gpus_avg_train_loss.item():.4f}")
-                all_gpus_avg_val_loss = avg_val_loss / world_size
-                print(f"All_GPUs_Val_losses: {all_gpus_avg_val_loss.item():.4f}")
+                # all_gpus_avg_val_loss = avg_val_loss / world_size
+                print(f"Val Loss: {avg_val_loss.item():.4f}")
                 
             # if device == 0:
         
@@ -1064,16 +1092,16 @@ def train():
                 # writer.add_scalar("GPU", device, global_step=step)
                 # writer.add_scalar("Epoch", epoch, global_step=step)
                 
-                perplexity = torch.exp(torch.tensor(all_gpus_avg_val_loss.item()))  # Calculate perplexity
+                perplexity = torch.exp(torch.tensor(avg_val_loss.item()))  # Calculate perplexity
 
                 if device == 0:
                     wandb.log({
-                        "All_GPUs_Val_losses": all_gpus_avg_val_loss.item(),
+                        "Val_Loss": avg_val_loss.item(),
                         "Val Perplexity": perplexity.item(),
-                        "Total Tokens Processed": total_tokens_processed,
+                        "Total Tokens Processed": token_count,
                         "Step": step,
                     })
-                    print(f"Step: {step} | Val Loss: {all_gpus_avg_val_loss.item():.4f} | Perplexity: {perplexity.item():.4f} | Tokens: {total_tokens_processed}")
+                    print(f"Step: {step} | Val Loss: {avg_val_loss.item():.4f} | Perplexity: {perplexity.item():.4f} | Tokens: {token_count}")
                 
                 
         
@@ -1122,7 +1150,7 @@ def train():
                 batch_size, block_size, embeddings_dims = logits.shape
                 # print(logits.shape)
                 # print(targets)
-                logits = logits.view(batch_size*block_size, embeddings_dims).to(torch.float16)
+                logits = logits.view(batch_size*block_size, embeddings_dims)
                 # print("OK")
                 targets = targets.view(batch_size * block_size)
                 # print("OK2")
@@ -1134,9 +1162,12 @@ def train():
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1) # so that we dont synchronize the gradient everytime across the GPU devices
             scaler.scale(loss).backward()
                 # Check for unused parameters
-            unused_params = find_unused_parameters(model)
-            if unused_params:
-                print(f"Unused parameters: {unused_params}")
+            del logits, targets, loss
+            torch.cuda.empty_cache()
+
+            # unused_params = find_unused_parameters(model)
+            # if unused_params:
+            #     print(f"Unused parameters: {unused_params}")
         # break
     
             if(device == 0):
@@ -1146,7 +1177,7 @@ def train():
                     
                     print("Micro Batch : ", micro_step)
                     print("Step : ", step, "/", total_iters)
-                    print('Total batches: ', len(train_dataloader))
+                    # print('Total batches: ', len(train_dataloader))
                     print("Total gradient accumulation steps: ", gradient_accumulation_steps)
                     print("Total tokens processed: ", token_count)
             # count += 1
@@ -1159,35 +1190,42 @@ def train():
         
         # Compute gradient norms before clipping
         if(ModelArgs.clip != 0.0):
+            
             scaler.unscale_(optimizer) #To avoid underflow
             total_norm_before = torch.norm(
-                torch.stack([torch.norm(p.grad.detach(), 2) for p in model.parameters()]), 2
+                torch.stack([torch.norm(p.grad.detach(), 2) for p in model.parameters() if p.grad is not None]), 2
             )
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=ModelArgs.clip)
 
             # Compute gradient norms after clipping
             total_norm_after = torch.norm(
-                torch.stack([torch.norm(p.grad.detach(), 2) for p in model.parameters()]), 2
+                torch.stack([torch.norm(p.grad.detach(), 2) for p in model.parameters() if p.grad is not None]), 2
             )
             
             if(device  == 0 and step !=0):
                 print(f"Gradient Norm Before Clipping: {total_norm_before.item():.4f}")
                 print(f"Gradient Norm After Clipping: {total_norm_after.item():.4f}")
-
+        
+        # Compute gradient norms for each parameter
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                grad_norm = param.grad.norm().item()
+                print(f"Gradient norm for {name}: {grad_norm:.4f}")
+        
         scaler.step(optimizer)
         scaler.update()
-    
+        # torch.cuda.empty_cache()
         # optimizer.step()
         # new_scheduler.step()
         
         torch.cuda.synchronize() 
-        torch.distributed.reduce(loss, dst=0, op=torch.distributed.ReduceOp.SUM)
+        # torch.distributed.reduce(loss, dst=0, op=torch.distributed.ReduceOp.SUM)
         perplexity = torch.exp(torch.tensor(accumulated_loss.item()))  # Calculate perplexity
         if(device == 0):
             wandb.log({
                     "Learning Rate": lr,
-                    "All_GPUs_Train_losses": accumulated_loss.item(),
+                    "Train_Loss": accumulated_loss.item(),
                     "Train Perplexity": perplexity.item(),
                     "Total Tokens Processed": token_count,
                     "Step": step,
@@ -1232,7 +1270,7 @@ def train():
                 
                 # prompt = alpaca_prompt.format("You are a helpful assistant.",  "Say a joke.",  "")
     #             print("Generating text")
-                prompt = "Hello I am an AI Assistant and "
+                prompt = "Once upon a time, there was a pretty boy"
                 generated_text = topk_sampling(model, prompt, max_length=100, top_k=50, temperature=1.0, device=device)
     
         #         generated_text = greedy_decode(
@@ -1248,16 +1286,17 @@ def train():
                 # generated_text = beam_search(model, tokenizer, "Once upon a time ", beam_width=5, max_length=50, temperature=0.6)
                 print(f" Step: {step} | Generated Text: {generated_text}")
             # model.train()
-            # save_to_file(generated_text)
+                save_to_file(generated_text)
                 count -= 1
         
         # if step != 0:
         #         train_step_iterator.set_postfix({"Train loss": f"{all_gpus_avg_train_loss.item():.4f} | Val Loss : {all_gpus_avg_val_loss.item():.4f}"})
         
-    
+
+
         # break
-        # if step % 100 == 0:
-        #     torch.cuda.empty_cache()
+        if step % 5 == 0:
+            torch.cuda.empty_cache()
     # Cleanup
     if device == 0:
         # writer.close()
