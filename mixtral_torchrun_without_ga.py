@@ -824,12 +824,12 @@ torch.set_float32_matmul_precision('high')
 scaler = torch.amp.GradScaler(enabled=(ModelArgs.dtype == 'float16'))
 
 save_chechpoint_iter = 50
-total_iters = 10000
+total_iters = 256000
 eval_iters = 50
 eval_check = 100
 warmup_iters = 1200
 min_lr = 0.1 * ModelArgs.max_lr
-lr_decay_iters = 10000
+lr_decay_iters = 256000
 total_batch_size = 524288
 micro_batch_size = ModelArgs.batch_size
 gradient_accumulation_steps = total_batch_size // (micro_batch_size * (ModelArgs.block_size * torch.cuda.device_count()))
@@ -1131,66 +1131,66 @@ def train():
         
         
         optimizer.zero_grad(set_to_none=True)
-        for micro_step in range(gradient_accumulation_steps):
-            try:
-                batch = next(train_data_iterator)
-            except StopIteration:
-                train_data_iterator = iter(train_dataloader)
-                batch = next(train_data_iterator)
-            # print(batch)
-            # batch = next(train_data_iterator)
-            # print(batch)
-            # batch = {k: v.to(self.local_rank) for k, v in batch.items()}
-            idx = batch['input_ids'].to(device)
-            # idx, targets = get_batch(split='train')
-            # print(f"Starting the train step: {step}...")
-            # for idx, targets in train_loader:
-            # idx, targets = next(iter(train_loader))
+        # for micro_step in range(gradient_accumulation_steps):
+        try:
+            batch = next(train_data_iterator)
+        except StopIteration:
+            train_data_iterator = iter(train_dataloader)
+            batch = next(train_data_iterator)
+        # print(batch)
+        # batch = next(train_data_iterator)
+        # print(batch)
+        # batch = {k: v.to(self.local_rank) for k, v in batch.items()}
+        idx = batch['input_ids'].to(device)
+        # idx, targets = get_batch(split='train')
+        # print(f"Starting the train step: {step}...")
+        # for idx, targets in train_loader:
+        # idx, targets = next(iter(train_loader))
+        
+        # print("Idx: ", idx)
+        # print("Targets: ", targets)
+        
+        # idx = idx.to(device)
+        # print("Idx: ", idx)
+        # print("Targets: ", targets)
+        targets = batch['labels'].to(device)
+        token_count += len(idx)
+        with torch.autocast(device_type=ModelArgs.device, dtype=torch.float16):
+            logits = model(idx)
+            batch_size, block_size, embeddings_dims = logits.shape
+            # print(logits.shape)
+            # print(targets)
+            logits = logits.view(batch_size*block_size, embeddings_dims)
+            # print("OK")
+            targets = targets.view(batch_size * block_size)
+            # print("OK2")
+            loss = nn.functional.cross_entropy(logits, targets, ignore_index=tokenizer.pad_token_id)
             
-            # print("Idx: ", idx)
-            # print("Targets: ", targets)
+            # loss = loss / gradient_accumulation_steps #IDK why div is done here specifically? Maybe think of it in terms of a very big batch being processed and there is need for equal important of each mini batch for the overall big batch
+            # accumulated_loss += loss.detach()
             
-            # idx = idx.to(device)
-            # print("Idx: ", idx)
-            # print("Targets: ", targets)
-            targets = batch['labels'].to(device)
-            token_count += len(idx)
-            with torch.autocast(device_type=ModelArgs.device, dtype=torch.float16):
-                logits = model(idx)
-                batch_size, block_size, embeddings_dims = logits.shape
-                # print(logits.shape)
-                # print(targets)
-                logits = logits.view(batch_size*block_size, embeddings_dims)
-                # print("OK")
-                targets = targets.view(batch_size * block_size)
-                # print("OK2")
-                loss = nn.functional.cross_entropy(logits, targets, ignore_index=tokenizer.pad_token_id)
-                
-                loss = loss / gradient_accumulation_steps #IDK why div is done here specifically? Maybe think of it in terms of a very big batch being processed and there is need for equal important of each mini batch for the overall big batch
-                accumulated_loss += loss.detach()
-            
-            model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1) # so that we dont synchronize the gradient everytime across the GPU devices
-            scaler.scale(loss).backward()
-                # Check for unused parameters
-            del logits, targets, loss
-            
+        # model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1) # so that we dont synchronize the gradient everytime across the GPU devices
+        scaler.scale(loss).backward()
+            # Check for unused parameters
+        # del logits, targets, loss
+        
 
-            unused_params = find_unused_parameters(model)
-            if unused_params:
-                print(f"Unused parameters: {unused_params}")
-        # break
-    
-            if(device == 0):
-                if(micro_step % 10 == 0):
-            #     if(step == train_loader_length):
-            #       break
-                    
-                    print("Micro Batch : ", micro_step)
-                    print("Step : ", step, "/", total_iters)
-                    # print('Total batches: ', len(train_dataloader))
-                    print("Total gradient accumulation steps: ", gradient_accumulation_steps)
-                    print("Total tokens processed: ", token_count)
-            # count += 1
+        unused_params = find_unused_parameters(model)
+        if unused_params:
+            print(f"Unused parameters: {unused_params}")
+    # break
+
+        if(device == 0):
+            # if(micro_step % 10 == 0):
+        #     if(step == train_loader_length):
+        #       break
+                
+            # print("Micro Batch : ", micro_step)
+            print("Step : ", step, "/", total_iters)
+            # print('Total batches: ', len(train_dataloader))
+            # print("Total gradient accumulation steps: ", gradient_accumulation_steps)
+            print("Total tokens processed: ", token_count)
+        # count += 1
        
         lr = get_lr(step)
         for params in optimizer.param_groups:
@@ -1231,11 +1231,11 @@ def train():
         torch.cuda.empty_cache()
         torch.cuda.synchronize() 
         # torch.distributed.reduce(loss, dst=0, op=torch.distributed.ReduceOp.SUM)
-        perplexity = torch.exp(torch.tensor(accumulated_loss.item()))  # Calculate perplexity
+        perplexity = torch.exp(torch.tensor(loss.item()))  # Calculate perplexity
         if(device == 0):
             wandb.log({
                     "Learning Rate": lr,
-                    "Train_Loss": accumulated_loss.item(),
+                    "Train_Loss": loss.item(),
                     "Train Perplexity": perplexity.item(),
                     "Total Tokens Processed": token_count,
                     "Step": step,
