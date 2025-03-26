@@ -137,7 +137,7 @@ class ModelArgs:
     #Hyperparameters
     
     epochs = 4
-    block_size = 128
+    block_size = 256
     batch_size = 128
     embeddings_dims = 512
     attn_dropout = 0.1
