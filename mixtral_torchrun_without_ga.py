@@ -44,53 +44,14 @@ torch.cuda.manual_seed(1337)
 from datasets import load_dataset, concatenate_datasets
 
 torch.cuda.set_device('cuda:0')
-# data = {}
-# texts = []
-# with open('data/input.txt', 'r') as f:
-#     texts.append(f.readlines())
-    
-# # print(texts)
-# # print(len(texts[0]))
-# data = {
-#     "text": texts[0]
-# }
-# fw_train = Dataset.from_dict(data)
-# print(fw_train)
-# fw_train = load_dataset("karpathy/tiny_shakespeare", split="train", trust_remote_code=True)
-# print(fw_train['text'])
-# text = fw_train['text'][0].split("\n")
-# print(text)   
-# filtered_lines = [line for line in text if line != '']
-# print(len(filtered_lines))
-# use name="sample-10BT" to use the 10BT sample
 
 
-TOKEN = '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'
+
+TOKEN = '...'
 tinystories = True
 fw = False
 fw_train = None
 fw_test = None
-# if(tinystories):
-#     fw_train = load_dataset("roneneldan/TinyStories", split="train")
-#     fw_test = load_dataset("roneneldan/TinyStories", split="validation")
-#     print(fw_train)
-#     print(fw_test)
-# if(fw):   
-#     fw_train = load_dataset("HuggingFaceFW/fineweb", name="sample-10BT", split="train", streaming=True, token=TOKEN)
-#     fw_train = fw_train.train_test_split(test_size=0.01)
-#     # print(fw_train)
-#     print(fw_train)
-# Select only 1000 rows from the dataset
-# fw_train = fw_train.select(range(1000000))
-# alpaca = load_dataset("yahma/alpaca-cleaned", split='train')
-# dolly = load_dataset("llm-wizard/dolly-15k-instruction-alpaca-format", split='train')
-# merged_dataset = concatenate_datasets([alpaca, dolly])
-# dataset = load_dataset("swype/instruct", split='train', trust_remote_code=True)
-# print(fw_train)
-# Split the dataset into training and validation sets
-# Split the dataset into training and validation sets
-# fw_train = fw_train.train_test_split(test_size=0.01)
-# print(fw_train)
 
 # Load training data
 train_data = load_dataset(
@@ -106,19 +67,7 @@ val_data = load_dataset(
     token=TOKEN
 )
 
-# train_data = train_data.to_iterable_dataset().shuffle(buffer_size=100000, seed=42)
-# val_data = val_data.to_iterable_dataset().shuffle(buffer_size=100000, seed=42)
 
-# Reserve first 1% (or fixed number) for validation
-# num_val_samples = 100000  # Adjust based on dataset size
-# val_data = train_stream.take(num_val_samples)
-# train_data = train_stream.skip(num_val_samples)
-
-# Access the splits
-# train_dataset = train_val_split['train']
-# val_dataset = train_val_split['test']
-
-# train_dataset = fw_train.train_test_split(test_size=0.2)
 
 
 def setup(rank=None, world_size=None):
@@ -223,21 +172,7 @@ def tokenize_function(examples):
 
 def prepare_dataset(split, device, batch_size):
     print("Device is: ", device)
-    # alpaca_prompt = '''
-    
-    
-    # ### Instruction:
-    # {}
 
-    # ### Response:
-    # {}
-    # '''
-    # Load a subset of the C4 dataset with a glob pattern for specific training files
-    # dataset = load_dataset("allenai/c4", data_files=["en/c4-train.00001-of-01024.json.gz"], trust_remote_code=True)
-
-    # Initialize tokenizer
-    # tokenizer = AutoTokenizer.from_pretrained("gpt2")
-    # generator = torch.Generator(device=device)
     def collate_fn(batch):
         # Extract text data
         texts = [item ["text"] for item in batch]
@@ -355,24 +290,6 @@ class RotaryEmbeddings(nn.Module):
         self.batch_size = batch_size
         self.theta = 0
         self.device=device
-
-        # self.d_model = embeddings_dims
-        # self.i = torch.arange(0, embeddings_dims, dtype=torch.float32)
-        # # self.pos = torch.arange(0, block_size, dtype=torch.float32)
-        # self.exp = ((2 * self.i)) / self.d_model
-        # self.theta = 10000 ** self.exp
-        # # print(self.theta.shape)
-        # self.x_reshaped = torch.randn(batch_size, block_size, embeddings_dims,dtype=torch.float32, device=device)
-
-        # self.cos = torch.cos((self.i / self.theta))
-        # self.sin = torch.sin((self.i / self.theta))
-
-        # self.even = self.sin[::2]
-        # self.odd = self.cos[1::2]
-
-        # # self.block = torch.empty((odd.size(0) + even.size(0),), dtype=self.even.dtype)
-        # self.x_reshaped[..., : , ::2] = self.even
-        # self.x_reshaped[..., : , 1::2] = self.odd
 
     
     def apply_rope(self, seq):
@@ -568,62 +485,8 @@ class MoeLayer(nn.Module):
             noisy_router = self.gate_out
         top_k_values, top_k_indices = torch.topk(noisy_router, k=ModelArgs.top_experts) #[bs, seq len, top k]
         probs = torch.nn.functional.softmax(top_k_values, dim=-1) #[bs, seq len, top k]
-        #Softplus isn't really needed tbh, since its gaussian anyways
 
-
-        #imp to add dim=-1 which specifies the softmax to be applied to the experts dim
-        # print(top_k_indices[11])
-        # print(top_k_values[20])
-        # print(probs[20])
-        # outputs = torch.zeros(x.size(), device=ModelArgs.device)
         out = 0
-        # for batch in range(x.shape[0]):
-        #     for i in range(x.shape[1]):
-        #         for j in range(ModelArgs.top_experts):
-        #             # print(i.shape)
-        #             # print('X batched shape: ', x[batch].shape)
-        #             # print('X shape: ', x.shape)
-        #             current_head_idx = top_k_indices[batch, i][j]
-        #             # print(top_k_indices[batch, i])
-        #             # print(top_k_indices[batch, i][j])
-        #             head_out = self.heads[current_head_idx](x[batch, i])
-        #             # print('Head out shape: ', head_out.shape)
-
-        #             # print('Softmax shape: ', torch.nn.functional.softmax(top_k_values[top_k_indices[i]]).shape)
-        #             # print('Head out shape: ', head_out.shape)
-        #             # print("Pro: ", probs.shape)
-        #             # print("Top K indices: ", top_k_indices.shape)
-        #             # print(probs[batch, top_k_indices[batch, i]])
-        #             # print(probs[batch, top_k_indices[batch, i]].shape)
-        #             # self.outputs[batch,i] = probs[batch, i]
-        #             # print(probs[batch, i].shape)
-        #             # print(probs[batch, i])
-        #             # print(probs[batch, i][j])
-        #             # outputs[batch,i] = probs[batch, i][j]
-        #             # print(self.outputs.shape)
-        #             out += head_out * probs[batch, i][j]
-         # Gather the outputs from the selected experts
-        # expert_outputs = torch.zeros(
-        #     x.shape[0], x.shape[1], ModelArgs.top_experts, x.shape[2], 
-        #     device=x.device, 
-        #     dtype=x.dtype
-        # )
-
-        # # Gather the outputs from the selected experts
-        # for expert_idx in range(ModelArgs.experts):
-        #     expert_mask = (top_k_indices == expert_idx)  # Shape: (batch_size, seq_len, top_k)
-        #     # expert_mask = expert_mask.to(x.dtype)
-        #     if expert_mask.any():
-        #         # Apply the expert only to the relevant inputs
-        #         expert_input = x[expert_mask.any(dim=-1)]
-        #         expert_output = self.heads[expert_idx](expert_input) #[bz, seq, embd]
-        #         expert_outputs[expert_mask] = expert_output.to(expert_outputs.dtype)
-
-        # # Weight the expert outputs by their probabilities
-        # weighted_outputs = expert_outputs * probs.unsqueeze(-1)  # Shape: (batch_size, seq_len, top_k, emb_dim)
-        # out = weighted_outputs.sum(dim=2)  # Sum over the top_k dimension to get the final output
-        # return out
-
 
         out = torch.zeros_like(x)
         for expert_idx in range(ModelArgs.experts):
@@ -768,14 +631,6 @@ class Mixtral(nn.Module):
 
         elif isinstance(m, nn.Embedding):
             torch.nn.init.kaiming_normal_(m.weight)
-
-    # def _init_weights(self, module):  #Weight Initialization
-    #         if isinstance(module, nn.Linear):
-    #             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-    #             if module.bias is not None:
-    #                 torch.nn.init.zeros_(module.bias)
-    #         elif isinstance(module, nn.Embedding):
-                # torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, x):
         x = self.text_embds(x)
@@ -1044,14 +899,7 @@ def train():
     # print(f"Model on device {device} is ready")
     print(f"Model on device {device} is ready")
     
-    # Wrap model with DDP after moving to GPU
-    # model = DDP(model, device_ids=[device])
-    # optimizer = optim.AdamW(model.parameters(), lr=ModelArgs.max_lr, betas=(ModelArgs.beta_1, ModelArgs.beta_2), weight_decay=ModelArgs.weight_decay_optim, eps=1e-8)
-    # # scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=4000, T_mult=1, eta_min=1e-5)
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(None, T_max=30000, eta_min=1e-6)
-    # _load_snapshot('/kaggle/input/models/snapshot2.pt', model.module, None, None)
-    # optimizer = optim.AdamW(model.parameters(), lr=ModelArgs.max_lr, betas=(ModelArgs.beta_1, ModelArgs.beta_2), weight_decay=ModelArgs.weight_decay_optim, eps=ModelArgs.eps)
-     # Use 8-bit optimizer
+
     optimizer = optim.AdamW(
         model.parameters(), 
         lr=ModelArgs.max_lr, 
@@ -1063,63 +911,7 @@ def train():
     # model = torch.compile(model)
     model = model.to(device)
     
-    # model = DDP(model, device_ids=[device])
     
-
-    # new_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=25000, eta_min=1e-6) #with the prev optim snapshot
-    # new_scheduler = trapezoidal_lr_scheduler(optimizer, ModelArgs.max_lr, total_steps, warmup_steps, plateau_steps, decay_steps)
-    
-    # warmup_scheduler = LambdaLR(optimizer, lr_lambda=warmup_fn)
-    # new_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=20000, eta_min=1e-6)
-    # Cosine decay after warmup
-    # new_scheduler = CosineAnnealingLR(optimizer, T_max=20000, eta_min=1e-6)
-    
-    # Combine both schedulers
-    # scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, new_scheduler], milestones=[2000])
-
-     # Reset learning rate to 1e-4
-    # for param_group in optimizer.param_groups:
-    #     param_group['lr'] = ModelArgs.max_lr
-    # scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=2000, T_mult=1, eta_min=1e-6)
-    # print("Old optimizer with new lr ready")
-
-    
-    
-    # optimizer = torch.optim.AdamW(params=model.parameters(), lr=ModelArgs.max_lr)
-    # Create DataLoader with collate_fn
-    # train_loader = DataLoader(train_dataset,  batch_size=ModelArgs.batch_size, shuffle=False, sampler=DistributedSampler(train_dataset, shuffle=True, num_replicas=int(os.environ["WORLD_SIZE"]), rank=device))
-    # val_loader = DataLoader(val_dataset,   batch_size=ModelArgs.batch_size, shuffle=False, sampler=DistributedSampler(train_dataset, shuffle=True, num_replicas=int(os.environ["WORLD_SIZE"]), rank=device))
-    # print("Loader is ready")
-        # print(train_loader)
-    # print(next(iter(train_loader)))
-
-
-    # for X,y in train_loader:
-    #     print(X.shape)
-    #     print(y.shape)
-    
-    # alpaca_prompt = '''
-
-    # ### Instruction:
-    # {instruction}
-
-    # ### Input:
-    # {input}
-
-    # ### Response:
- 
-    # '''
-     # Only create progress bar for rank 0
-    # eval_epoch_iterator = range(eval_iters)
-    # train_epoch_iterator = range(total_iters)
-    # if device == 0:
-    #     train_epoch_iterator = tqdm(train_epoch_iterator, desc="Training")
-
-    # train_epoch_iterator = range(ModelArgs.epochs)
-    # if device == 0:  # Ensure tqdm only runs on rank 0
-    #     train_epoch_iterator = tqdm(train_epoch_iterator, desc="Training Progress", position=0, leave=True)
-
-    # lr_scheduler_cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max= total_steps - initial_iters)
     
     def cyclical_lr(step, base_lr=min_lr, max_lr=ModelArgs.max_lr, step_size=1500):
         cycle = math.floor(1 + step / (2 * step_size))
@@ -1418,25 +1210,7 @@ def train():
                     # "Epoch": epoch
                     
                 })
-        # print(loss.item())
-        # if(step % 100 == 0):
-        #     print(f'Step : {step} | GPU: {device} Loss: {loss.item()}')
-        # if device == 0:
-        #     print("loss: ", loss.item())
-        # train_epoch_iterator.set_postfix({"loss": f"{loss.item():.4f}"})
-        # print(loss.item())
-        # break
-
-        # if step != 0 and (step % eval_iters == 0 or step == total_steps -1) :
-        #     loss_values = estimate_loss()
-        #     print("Train Loss at {} steps : {}".format(step, loss.item()), "Val Loss at {} steps : {}".format(step, loss_values['val']))
-
-        # Add after a training step:
-        # unused_params = find_unused_parameters(model)
-        # print("Unused parameters:", unused_params)
-        # break
-         # Add periodic memory cleanup
-
+      
         if device == 0 and step % 50 == 0:
             count = 1
             while(count):  # Only generate text on the main process
