@@ -26,7 +26,7 @@ import bitsandbytes as bnb  # Add this import
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import os
 from torch.utils.checkpoint import checkpoint
-from dotenv import load_dotenv
+# from dotenv import load_dotenv
 
 torch.manual_seed(1337)
 torch.cuda.manual_seed(1337)
@@ -63,9 +63,9 @@ torch.cuda.set_device('cuda:0')
 # filtered_lines = [line for line in text if line != '']
 # print(len(filtered_lines))
 # use name="sample-10BT" to use the 10BT sample
-load_dotenv()
 
-TOKEN = os.getenv('HF_TOKEN')
+
+TOKEN = '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'
 tinystories = True
 fw = False
 fw_train = None
@@ -106,8 +106,8 @@ val_data = load_dataset(
     token=TOKEN
 )
 
-train_data = train_data.to_iterable_dataset().shuffle(buffer_size=100000, seed=42)
-val_data = val_data.to_iterable_dataset().shuffle(buffer_size=100000, seed=42)
+# train_data = train_data.to_iterable_dataset().shuffle(buffer_size=100000, seed=42)
+# val_data = val_data.to_iterable_dataset().shuffle(buffer_size=100000, seed=42)
 
 # Reserve first 1% (or fixed number) for validation
 # num_val_samples = 100000  # Adjust based on dataset size
@@ -138,7 +138,7 @@ class ModelArgs:
     
     epochs = 4
     block_size = 256
-    batch_size = 128
+    batch_size = 64
     embeddings_dims = 512
     attn_dropout = 0.1
     no_of_heads = 8
@@ -149,7 +149,7 @@ class ModelArgs:
     no_of_decoder_layers = 8 #IMP needs to be thoroughly calculated
     weight_decay_optim = 0.01
     beta_1 = 0.9
-    beta_2 = 0.99
+    beta_2 = 0.95
     clip = 1.0
     device = 'cuda'
     # no_kv_heads = 2
@@ -168,18 +168,20 @@ def _save_snapshot(model, optimizer, scheduler, epoch, step):
     snapshot = {
         "MODEL_STATE": model.state_dict(),
         "OPTIMIZER_STATE": optimizer.state_dict(),
-        # "SCHEDULER_STATE": scheduler.state_dict(),  
+        "SCHEDULER_STATE": scheduler.state_dict() if scheduler is not None else None,  # Save scheduler state
         "EPOCHS_RUN": epoch,
         "STEP_RUN": step
     }
-    torch.save(snapshot, f"snapshot_{step}.pt")
+    torch.save(snapshot, f"/kaggle/working/snapshot_{step}.pt")
     print(f"Epoch: {epoch} | Step: {step} | Snapshot saved.")
+
 
 def _load_snapshot(snapshot_path, model, optimizer, scheduler):
     snapshot = torch.load(snapshot_path)
     model.load_state_dict(snapshot["MODEL_STATE"])
     optimizer.load_state_dict(snapshot["OPTIMIZER_STATE"])
-    # scheduler.load_state_dict(snapshot["SCHEDULER_STATE"])  # Load scheduler state
+    if scheduler is not None and "SCHEDULER_STATE" in snapshot and snapshot["SCHEDULER_STATE"] is not None:
+        scheduler.load_state_dict(snapshot["SCHEDULER_STATE"])  # Load scheduler state
     epoch = snapshot["EPOCHS_RUN"]
     step = snapshot["STEP_RUN"]
     print(f"Resuming from Epoch {epoch}, Step {step}")
@@ -282,7 +284,7 @@ def prepare_dataset(split, device, batch_size):
             # sampler=DistributedSampler(fw_train, shuffle=True),
             collate_fn=collate_fn,
             drop_last=True,
-            # shuffle=True,
+            shuffle=True,
             #  pin_memory=True,  # Add this
             # persistent_workers=True
         )
@@ -378,11 +380,11 @@ class RotaryEmbeddings(nn.Module):
         # print(seq.shape)
         # print(self.embeddings_dims)
         # self.matrix = torch.zeros((seq_len, self.embeddings_dims, self.embeddings_dims), dtype=torch.float32,  requires_grad=False,  device = self.device)
-
+        token_idx = torch.arange(0 , seq_len, dtype=torch.float32,  device = self.device).unsqueeze(1)
         positions = torch.arange(0 , embeds_dims, 2, dtype=torch.float32,  device = self.device).unsqueeze(0)
         # dims = torch.arange(1, self.embeddings_dims // 2,  dtype=torch.float32)
         theta = 10000 ** (-2 * (positions) / embeds_dims)
-        angles = positions * theta
+        angles = token_idx * theta
         angles = angles.expand(seq_len, -1) # because this thing needs to be applied to every sequence in the batch but with embeds dims halved
         x_reshaped = seq.view(batch_size, seq_len, embeds_dims // 2, 2)
         
@@ -549,15 +551,15 @@ class MoeLayer(nn.Module):
         super().__init__()
 
         self.heads = nn.ModuleList([SWiGLUExpertMoE() for _ in range(ModelArgs.experts)])
-        self.gate = nn.Linear(in_features=embeddings_size, out_features=ModelArgs.experts, device=device)
-        if(ModelArgs.noisy_topk and ModelArgs.use_checkpointing == False):
-            self.noise = nn.Linear(in_features=embeddings_size, out_features=ModelArgs.experts, device=device)
+        self.gate = nn.Linear(in_features=embeddings_size, out_features=ModelArgs.experts, device=device, bias=False)
+        if(ModelArgs.noisy_topk is True and ModelArgs.use_checkpointing == False):
+            self.noise = nn.Linear(in_features=embeddings_size, out_features=ModelArgs.experts, device=device, bias=False)
         # self.outputs = torch.zeros((batch_size,block_size, embeddings_size), device=device) #batch size needs to be defined because we are accessing it explicitly
         self.device = device
     def forward(self, x):
         # mlp_weights_init = self.mlp.apply(weights_init)
         self.gate_out = self.gate(x) #[bz, seq, num_experts]
-        if(ModelArgs.noisy_topk and ModelArgs.use_checkpointing == False):
+        if(ModelArgs.noisy_topk == True and ModelArgs.use_checkpointing == False):
             noise = self.noise(x)
             gaussian_noise = torch.normal(0, 1, size=self.gate_out.shape, device=self.device)
             noisy_router = F.softplus(noise) * gaussian_noise
@@ -601,28 +603,48 @@ class MoeLayer(nn.Module):
         #             # print(self.outputs.shape)
         #             out += head_out * probs[batch, i][j]
          # Gather the outputs from the selected experts
-        expert_outputs = torch.zeros(
-            x.shape[0], x.shape[1], ModelArgs.top_experts, x.shape[2], 
-            device=x.device, 
-            dtype=x.dtype
-        )
+        # expert_outputs = torch.zeros(
+        #     x.shape[0], x.shape[1], ModelArgs.top_experts, x.shape[2], 
+        #     device=x.device, 
+        #     dtype=x.dtype
+        # )
 
-        # Gather the outputs from the selected experts
+        # # Gather the outputs from the selected experts
+        # for expert_idx in range(ModelArgs.experts):
+        #     expert_mask = (top_k_indices == expert_idx)  # Shape: (batch_size, seq_len, top_k)
+        #     # expert_mask = expert_mask.to(x.dtype)
+        #     if expert_mask.any():
+        #         # Apply the expert only to the relevant inputs
+        #         expert_input = x[expert_mask.any(dim=-1)]
+        #         expert_output = self.heads[expert_idx](expert_input) #[bz, seq, embd]
+        #         expert_outputs[expert_mask] = expert_output.to(expert_outputs.dtype)
+
+        # # Weight the expert outputs by their probabilities
+        # weighted_outputs = expert_outputs * probs.unsqueeze(-1)  # Shape: (batch_size, seq_len, top_k, emb_dim)
+        # out = weighted_outputs.sum(dim=2)  # Sum over the top_k dimension to get the final output
+        # return out
+
+
+        out = torch.zeros_like(x)
         for expert_idx in range(ModelArgs.experts):
-            expert_mask = (top_k_indices == expert_idx)  # Shape: (batch_size, seq_len, top_k)
-            # expert_mask = expert_mask.to(x.dtype)
-            if expert_mask.any():
-                # Apply the expert only to the relevant inputs
-                expert_input = x[expert_mask.any(dim=-1)]
-                expert_output = self.heads[expert_idx](expert_input) #[bz, seq, embd]
-                expert_outputs[expert_mask] = expert_output.to(expert_outputs.dtype)
+            # Create mask for current expert across all top_k positions
+            expert_mask = (top_k_indices == expert_idx)
+            
+            # Sum probabilities for current expert
+            expert_weights = (probs * expert_mask).sum(dim=-1)  # [batch, seq_len]
+            
+            # Get inputs where expert is used
+            selected = expert_weights > 0
+            if not selected.any():
+                continue
+                
+            # Process all selected inputs through expert
+            expert_out = self.heads[expert_idx](x[selected])
+            
+            # Weight and accumulate outputs
+            out[selected] += expert_out * expert_weights[selected].unsqueeze(-1)
 
-        # Weight the expert outputs by their probabilities
-        weighted_outputs = expert_outputs * probs.unsqueeze(-1)  # Shape: (batch_size, seq_len, top_k, emb_dim)
-        out = weighted_outputs.sum(dim=2)  # Sum over the top_k dimension to get the final output
         return out
-
-
 
 class AttentionHead(nn.Module):
     def __init__(
@@ -757,7 +779,7 @@ class Mixtral(nn.Module):
 
     def forward(self, x):
         x = self.text_embds(x)
-        x = x + self.positional_embeddings[: , :x.shape[1], :] #@@@Important remember
+        # x = x + self.positional_embeddings[: , :x.shape[1], :] #@@@Important remember
         for layer in self.decoder_layers:
             if(ModelArgs.use_checkpointing):
                 x = checkpoint(layer, x)
@@ -845,16 +867,16 @@ idx = torch.randint(
 # sample_idx = random.randint(range(len(train_dataset)))
 # idx, targets = train_dataset[0]
 idx = idx.to(ModelArgs.device)
-print("hre")
+# print("hre")
 # targets = targets.to(ModelArgs.device)
-summary(model=model,
+print(summary(model=model,
         input_data=idx,
         # input_size=(ModelArgs.batch_size, ModelArgs.block_size, ModelArgs.embeddings_dims),
         col_names=["input_size", "output_size", "num_params", "trainable"],
         col_width=20,
-        row_settings=["var_names"])
+        row_settings=["var_names"]))
 
-print("ghdgh")
+# print("ghdgh")
 def find_unused_parameters(model):
     unused = []
     for name, param in model.named_parameters():
@@ -974,24 +996,19 @@ gradient_accumulation_steps = total_batch_size // (micro_batch_size * (ModelArgs
 
 
 
-def cyclical_lr(step, base_lr=min_lr, max_lr=ModelArgs.max_lr, step_size=700):
-    cycle = math.floor(1 + step / (2 * step_size))
-    x = abs(step / step_size - 2 * cycle + 1)
-    return base_lr + (max_lr - base_lr) * max(0, (1 - x))
 
-
-# def get_lr(it):
-#     # 1) linear warmup for warmup_iters steps
-#     if it < warmup_iters:
-#         return ModelArgs.max_lr * (it + 1) / (warmup_iters + 1)
-#     # 2) if it > lr_decay_iters, return min learning rate
-#     if it > lr_decay_iters:
-#         return min_lr
-#     # 3) in between, use cosine decay down to min learning rate
-#     decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
-#     assert 0 <= decay_ratio <= 1
-#     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) 
-#     return min_lr + coeff * (ModelArgs.max_lr - min_lr)
+def get_lr(it):
+    # 1) linear warmup for warmup_iters steps
+    if it < warmup_iters:
+        return ModelArgs.max_lr * (it + 1) / (warmup_iters + 1)
+    # 2) if it > lr_decay_iters, return min learning rate
+    if it > lr_decay_iters:
+        return min_lr
+    # 3) in between, use cosine decay down to min learning rate
+    decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
+    assert 0 <= decay_ratio <= 1
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) 
+    return min_lr + coeff * (ModelArgs.max_lr - min_lr)
 
 
 def train():
@@ -1035,7 +1052,7 @@ def train():
     # _load_snapshot('/kaggle/input/models/snapshot2.pt', model.module, None, None)
     # optimizer = optim.AdamW(model.parameters(), lr=ModelArgs.max_lr, betas=(ModelArgs.beta_1, ModelArgs.beta_2), weight_decay=ModelArgs.weight_decay_optim, eps=ModelArgs.eps)
      # Use 8-bit optimizer
-    optimizer = bnb.optim.AdamW8bit(
+    optimizer = optim.AdamW(
         model.parameters(), 
         lr=ModelArgs.max_lr, 
         betas=(ModelArgs.beta_1, ModelArgs.beta_2),
@@ -1104,7 +1121,16 @@ def train():
 
     # lr_scheduler_cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max= total_steps - initial_iters)
     
-    
+    def cyclical_lr(step, base_lr=min_lr, max_lr=ModelArgs.max_lr, step_size=1500):
+        cycle = math.floor(1 + step / (2 * step_size))
+        x = abs(step / step_size - 2 * cycle + 1)
+        return base_lr + (max_lr - base_lr) * max(0, (1 - x))
+
+# Initialize the scheduler
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda step: cyclical_lr(step))
+
+
+
     
     model.eval()
     world_size = torch.cuda.device_count()
@@ -1141,17 +1167,17 @@ def train():
                 targets = batch['labels']
                 idx = idx.to(device)
                 targets = targets.to(device)
-                with torch.autocast(device_type=device, dtype=torch.float16):
-                    
-                    logits = model(idx)
-                    batch_size, block_size, embeddings_dims = logits.shape
-                    logits = logits.view(batch_size * block_size, embeddings_dims)
-                    targets = targets.view(batch_size * block_size)
+                # with torch.autocast(device_type=device, dtype=torch.float16):
+                
+                logits = model(idx)
+                batch_size, block_size, embeddings_dims = logits.shape
+                logits = logits.view(batch_size * block_size, embeddings_dims)
+                targets = targets.view(batch_size * block_size)
 
-                    loss = F.cross_entropy(logits, targets, ignore_index=tokenizer.pad_token_id)
+                loss = F.cross_entropy(logits, targets, ignore_index=tokenizer.pad_token_id)
 
-                    total_loss += loss.item()
-                    total_batches += 1
+                total_loss += loss.item()
+                total_batches += 1
 
             # Compute mean loss for this epoch
             epoch_loss = total_loss / total_batches if total_batches > 0 else 0.0
@@ -1267,9 +1293,13 @@ def train():
             
         #     _save_snapshot(epoch=epoch, model=model, optimizer=optimizer, step=step)
 
+            # When saving a checkpoint:
         if step % save_checkpoint_iter == 0 and device == 0 and step != 0:
             print(f"Saving the model checkpoint for step: {step}")
-            _save_snapshot(model, optimizer, None, None, step)
+            _save_snapshot(model, optimizer, scheduler, None, step)  # Pass the scheduler here
+
+# When loading a checkpoint (if needed):
+# epoch, step = _load_snapshot('snapshot.pt', model, optimizer, scheduler)  # Pass the scheduler here
         
         accumulated_loss = 0.0
         
@@ -1299,22 +1329,22 @@ def train():
         # print("Targets: ", targets)
         targets = batch['labels'].to(device)
         token_count += len(idx)
-        with torch.autocast(device_type=ModelArgs.device, dtype=torch.float16):
-            logits = model(idx)
-            batch_size, block_size, embeddings_dims = logits.shape
-            # print(logits.shape)
-            # print(targets)
-            logits = logits.view(batch_size*block_size, embeddings_dims)
-            # print("OK")
-            targets = targets.view(batch_size * block_size)
-            # print("OK2")
-            loss = nn.functional.cross_entropy(logits, targets, ignore_index=tokenizer.pad_token_id)
-            
+        # with torch.autocast(device_type=ModelArgs.device, dtype=torch.float16):
+        logits = model(idx)
+        batch_size, block_size, embeddings_dims = logits.shape
+        # print(logits.shape)
+        # print(targets)
+        logits = logits.view(batch_size*block_size, embeddings_dims)
+        # print("OK")
+        targets = targets.view(batch_size * block_size)
+        # print("OK2")
+        loss = nn.functional.cross_entropy(logits, targets, ignore_index=tokenizer.pad_token_id)
+        
             # loss = loss / gradient_accumulation_steps #IDK why div is done here specifically? Maybe think of it in terms of a very big batch being processed and there is need for equal important of each mini batch for the overall big batch
             # accumulated_loss += loss.detach()
-            
+        loss.backward()    
         # model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1) # so that we dont synchronize the gradient everytime across the GPU devices
-        scaler.scale(loss).backward()
+        # scaler.scale(loss).backward()
             # Check for unused parameters
         # del logits, targets, loss
         
@@ -1362,15 +1392,16 @@ def train():
                 print(f"Gradient Norm After Clipping: {total_norm_after.item():.4f}")
         
         # Compute gradient norms for each parameter
-        for name, param in model.named_parameters():
-            if param.grad is not None:
-                grad_norm = param.grad.norm().item()
-                print(f"Gradient norm for {name}: {grad_norm}")
+        # for name, param in model.named_parameters():
+        #     if param.grad is not None:
+        #         grad_norm = param.grad.norm().item()
+        #         print(f"Gradient norm for {name}: {grad_norm}")
         
-        scaler.step(optimizer)
-        scaler.update()
+        # scaler.step(optimizer)
+        # scheduler.step()
+        # scaler.update()
         # torch.cuda.empty_cache()
-        # optimizer.step()
+        optimizer.step()
         # new_scheduler.step()
         torch.cuda.empty_cache()
         torch.cuda.synchronize() 
@@ -1378,7 +1409,7 @@ def train():
         perplexity = torch.exp(torch.tensor(loss.item()))  # Calculate perplexity
         if(device == 0):
             wandb.log({
-                    "Learning Rate": lr,
+                    "Learning Rate": optimizer.param_groups[0]['lr'],
                     "Train_Loss": loss.item(),
                     "Train Perplexity": perplexity.item(),
                     "Total Tokens Processed": token_count,
