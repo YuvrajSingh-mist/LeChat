@@ -20,49 +20,59 @@
 ---
 
 ####  ModelArgs (Hyperparameters)
+# Model Configuration (`ModelArgs`)
+
+This dataclass defines hyperparameters and configuration settings for a neural network model, optimized for modern deep learning tasks.
+
+## Hyperparameters Overview
+
+### Architecture
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `block_size` | 256 | Context window length for sequential data |
+| `embeddings_dims` | 512 | Dimension size for embeddings |
+| `no_of_heads` | 8 | Number of attention heads in multi-head attention |
+| `no_of_decoder_layers` | 8 | Number of transformer decoder layers |
+| `vocab_size` | 32768 | Vocabulary size (recommended as power of 2) |
+
+### Training
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `epochs` | 4 | Total training epochs |
+| `batch_size` | 64 | Samples per batch |
+| `val_epochs` | 2 | Validation frequency (in epochs) |
+| `clip` | 1.0 | Gradient clipping threshold |
+
+### Regularization
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `attn_dropout` | 0.1 | Dropout probability for attention layers |
+| `dropout` | 0.1 | General dropout probability |
+
+### Optimization
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `max_lr` | 1e-4 | Maximum learning rate |
+| `weight_decay_optim` | 0.01 | L2 regularization strength |
+| `beta_1` | 0.9 | AdamW first momentum factor |
+| `beta_2` | 0.95 | AdamW second momentum factor |
+
+### Mixture-of-Experts (MoE)
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `experts` | 8 | Total number of experts in MoE layer |
+| `top_experts` | 2 | Number of active experts per token |
+| `noisy_topk` | False | Enable noisy top-k expert selection |
+
+### Hardware
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `device` | 'cuda' | Training accelerator (GPU/CPU) |
+| `dtype` | auto | Floating precision (bfloat16/float16) |
+| `use_checkpointing` | True | Enable gradient checkpointing |
 
 
-Below is a table summarizing the configuration parameters for the model:
-
-| Parameter                      | Description                                                                 | Default Value                     | Type      |
-|--------------------------------|-----------------------------------------------------------------------------|-----------------------------------|-----------|
-| `epochs`                       | Number of training epochs                                                   | `4`                               | `int`     |
-| `block_size`                   | Size of each block (context length)                                         | `512`                             | `int`     |
-| `batch_size`                   | Batch size for training                                                    | `64`                              | `int`     |
-| `inference`                    | Inference mode (not specified)                                              | `None`                            | `None`    |
-| `embeddings_dims`              | Dimensionality of embeddings                                                | `512`                             | `int`     |
-| `attn_dropout`                 | Dropout rate for attention layers                                           | `0.1`                             | `float`   |
-| `no_of_heads`                  | Number of attention heads                                                   | `8`                               | `int`     |
-| `dropout`                      | Dropout rate for the model                                                  | `0.1`                             | `float`   |
-| `val_epochs`                   | Number of validation epochs                                                 | `2`                               | `int`     |
-| `max_lr`                       | Maximum learning rate                                                       | `6e-4`                            | `float`   |
-| `no_of_decoder_layers`         | Number of decoder layers                                                    | `8`                               | `int`     |
-| `weight_decay_optim`           | Weight decay for the optimizer                                              | `0.1`                             | `float`   |
-| `beta_1`                       | Beta 1 for Adam optimizer                                                   | `0.9`                             | `float`   |
-| `beta_2`                       | Beta 2 for Adam optimizer                                                   | `0.95`                            | `float`   |
-| `clip`                         | Gradient clipping value                                                     | `1.0`                             | `float`   |
-| `device`                       | Device to run the model (`cuda` or `cpu`)                                   | `'cuda'`                          | `str`     |
-| `no_kv_heads`                  | Number of key-value heads                                                   | `2`                               | `int`     |
-| `vocab_size`                   | Size of the vocabulary                                                      | `50304`                           | `int`     |
-| `eps`                          | Epsilon value for numerical stability                                       | `1e-5`                            | `float`   |
-| `dtype`                        | Data type for tensors (`bfloat16` if supported, else `float16`)             | `'bfloat16'` or `'float16'`       | `str`     |
-| `save_checkpoint_dir`          | Directory to save model checkpoints                                         | `"checkpoints"`                   | `str`     |
-| `prompt`                       | Default prompt for inference                                                | `"Once upon a time"`              | `str`     |
-| `save_checkpoint_iter`         | Save checkpoint every N iterations                                         | `50`                              | `int`     |
-| `total_iters`                  | Total number of training iterations                                        | `10000`                           | `int`     |
-| `eval_iters`                   | Evaluate model every N iterations                                          | `50`                              | `int`     |
-| `eval_check`                   | Check evaluation metrics every N iterations                                | `100`                             | `int`     |
-| `warmup_iters`                 | Number of warmup iterations for learning rate scheduling                   | `700`                             | `int`     |
-| `min_lr`                       | Minimum learning rate (10% of `max_lr`)                                     | `0.1 * max_lr`                    | `float`   |
-| `lr_decay_iters`               | Number of iterations for learning rate decay                               | `10000`                           | `int`     |
-| `total_batch_size`             | Total batch size across all devices                                         | `524288`                          | `int`     |
-| `micro_batch_size`             | Micro batch size per device                                                | `batch_size`                      | `int`     |
-| `gradient_accumulation_steps`  | Gradient accumulation steps                                                 | 524288 | `int` |
----
-#### Hardware Setup
-
- - Used DPP using Pytorch torchrun consisting of 2x GeForce RTX A100 AXM (80gb VRAM each) rented on runpod.io
- - The model is a 0.768GB in size but needs around 4 GB of VRAM when loaded in fp32 precision
+ - Used P100 on Kaggle
 ---
 
 #### Frameworks:
