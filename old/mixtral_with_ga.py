@@ -28,9 +28,9 @@ from datasets import load_dataset, concatenate_datasets
 from liger_kernel.transformers import LigerLayerNorm
 from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss
 
-# torch.cuda.set_device('cuda:0')
+torch.cuda.set_device('cuda:0')
 
-TOKEN = '...'
+TOKEN = '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'
 tinystories = False
 fw = True
 fw_train = None
@@ -739,12 +739,12 @@ torch.set_float32_matmul_precision('high')
 # scaler = torch.amp.GradScaler(enabled=(ModelArgs.dtype == 'float16'))
 
 save_checkpoint_iter = 1000
-total_iters = 80000
+total_iters = 20000
 eval_iters = 500 #should be at 1000
 eval_check = 100
 warmup_iters = 1000
 min_lr = 0.1 * ModelArgs.max_lr
-lr_decay_iters = 80000
+lr_decay_iters = 20000
 total_batch_size = 524288
 micro_batch_size = ModelArgs.batch_size
 gradient_accumulation_steps = total_batch_size // (micro_batch_size * (ModelArgs.block_size * torch.cuda.device_count()))
@@ -1042,19 +1042,19 @@ def train():
         
         
         optimizer.zero_grad(set_to_none=True)
-        # for micro_step in range(gradient_accumulation_steps):
-        try:
-            batch = next(train_data_iterator)
-        except StopIteration:
-            train_data_iterator = iter(train_dataloader)
-            batch = next(train_data_iterator)
+        for micro_step in range(gradient_accumulation_steps):
+            try:
+                batch = next(train_data_iterator)
+            except StopIteration:
+                train_data_iterator = iter(train_dataloader)
+                batch = next(train_data_iterator)
 
-        idx = batch['input_ids'].to(device)
+            idx = batch['input_ids'].to(device)
 
-        targets = batch['labels'].to(device)
-        token_count += (len(idx) * ModelArgs.batch_size)
-        # with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-        loss = model(idx, actual_labels = targets)
+            targets = batch['labels'].to(device)
+            token_count += (len(idx) * ModelArgs.batch_size)
+            # with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+            loss = model(idx, actual_labels = targets)
             # batch_size, block_size, embeddings_dims = logits.shape
             # print(logits.shape)   
             # print(targets)
@@ -1064,9 +1064,9 @@ def train():
             # print("OK2")
             # loss = nn.functional.cross_entropy(logits, targets, ignore_index=tokenizer.pad_token_id)
             
-        # loss = loss / gradient_accumulation_steps #IDK why div is done here specifically? Maybe think of it in terms of a very big batch being processed and there is need for equal important of each mini batch for the overall big batch
-        # accumulated_loss += loss.detach()
-        loss.backward() 
+            loss = loss / gradient_accumulation_steps #IDK why div is done here specifically? Maybe think of it in terms of a very big batch being processed and there is need for equal important of each mini batch for the overall big batch
+            accumulated_loss += loss.detach()
+            loss.backward() 
         # model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1) # so that we dont synchronize the gradient everytime across the GPU devices
         # scaler.scale(loss).backward()
         # Check for unused parameters
@@ -1131,12 +1131,12 @@ def train():
         # accumulated_loss = loss
         
         # torch.distributed.reduce(loss, dst=0, op=torch.distributed.ReduceOp.SUM)
-        loss /= world_size
-        perplexity = torch.exp(torch.tensor(loss.item()))  # Calculate perplexity
+        # loss /= world_size
+        perplexity = torch.exp(torch.tensor(accumulated_loss.item()))  # Calculate perplexity
         # if(device == 0):
         wandb.log({
                     "Learning Rate": scheduler.get_last_lr()[0],
-                    "Train_Loss": loss.item(),
+                    "Train_Loss": accumulated_loss.item(),
                     # "Train loss": loss.item(),
                     "Train Perplexity": perplexity.item(),
                     "Total Tokens Processed": token_count,

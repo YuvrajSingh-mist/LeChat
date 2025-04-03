@@ -28,9 +28,8 @@ from datasets import load_dataset, concatenate_datasets
 from liger_kernel.transformers import LigerLayerNorm
 from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss
 
-# torch.cuda.set_device('cuda:0')
 
-TOKEN = '...'
+TOKEN = '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'
 tinystories = False
 fw = True
 fw_train = None
@@ -71,9 +70,9 @@ class ModelArgs:
     #Hyperparameters
     
     epochs = 4
-    block_size = 128
+    block_size = 128 #128 for P100 #512
     batch_size = 64
-    embeddings_dims = 512
+    embeddings_dims = 512 
     attn_dropout = 0.1
     no_of_heads = 8
     dropout = 0.1
@@ -179,7 +178,7 @@ def prepare_dataset(split, device, batch_size):
             val_data,
 
             batch_size=batch_size,
-            # sampler=DistributedSampler(val_data),
+            # sampler=DistributedSampler(val_data, shuffle=False),
             collate_fn=collate_fn,
             drop_last=True,
             shuffle=False, 
@@ -198,10 +197,10 @@ def prepare_dataset(split, device, batch_size):
             drop_last=True,
             shuffle=True,
             # num_workers=os.cpu_count(),
-            num_workers = min(4, os.cpu_count()//2),  # Don't overallocate
-            prefetch_factor = 2,  # Balance memory/performance       
-            pin_memory=True,  # Add this
-            persistent_workers=True
+            # num_workers = min(4, os.cpu_count()//2),  # Don't overallocate
+            # prefetch_factor = 2,  # Balance memory/performance       
+            # pin_memory=True,  # Add this
+            # persistent_workers=True
     )
         elif(split == 'val'):
             data_loader = DataLoader(
@@ -211,12 +210,12 @@ def prepare_dataset(split, device, batch_size):
             # sampler=DistributedSampler(fw_train["test"], shuffle=False),
             collate_fn=collate_fn,
             # num_workers=os.cpu_count(),
-            num_workers = min(4, os.cpu_count()//2), # Don't overallocate
-            prefetch_factor = 2,  # Balance memory/performance
+            # num_workers = min(4, os.cpu_count()//2), # Don't overallocate
+            # prefetch_factor = 2,  # Balance memory/performance
             drop_last=True,
             shuffle=False,
-            pin_memory=True,  # Add this
-            persistent_workers=True
+            # pin_memory=True,  # Add this
+            # persistent_workers=True
         )
     return data_loader
 
@@ -709,6 +708,8 @@ from torchinfo import summary
 #         row_settings=["var_names"])
 # ModelArgs.use_liger = True
 
+torch.cuda.set_device('cuda:0')
+
 def find_unused_parameters(model):
     unused = []
     for name, param in model.named_parameters():
@@ -739,12 +740,12 @@ torch.set_float32_matmul_precision('high')
 # scaler = torch.amp.GradScaler(enabled=(ModelArgs.dtype == 'float16'))
 
 save_checkpoint_iter = 1000
-total_iters = 80000
+total_iters = 20000
 eval_iters = 500 #should be at 1000
 eval_check = 100
 warmup_iters = 1000
 min_lr = 0.1 * ModelArgs.max_lr
-lr_decay_iters = 80000
+lr_decay_iters = 20000
 total_batch_size = 524288
 micro_batch_size = ModelArgs.batch_size
 gradient_accumulation_steps = total_batch_size // (micro_batch_size * (ModelArgs.block_size * torch.cuda.device_count()))
@@ -834,6 +835,7 @@ def train():
     # setup()
     # device = int(os.environ["LOCAL_RANK"])
     # device = 0
+    device = 'cuda:0'
     # torch.cuda.set_device(int(device))
     # torch.set_default_device('cuda')
     # train_dataloader = prepare_dataset(ModelArgs.batch_size)
@@ -845,17 +847,16 @@ def train():
 
     # if(device == 0):
     print("dtype: ", ModelArgs.dtype)
-    device='cuda:0'
     
 #         # Initialise run
     wandb.init(
-            # entity = 'rajceo2031',
-                        project = 'Mixtral-DDP-Pretrain-10-billion-tokens',
-                        # config = CFG,
-                        # save_code = True,
-                        #group = 'ANN',
-                        #job_type = 'train'
-)
+                # entity = 'rajceo2031',
+                            project = 'Mixtral-DDP-Pretrain-10-billion-tokens',
+                            # config = CFG,
+                            # save_code = True,
+                            #group = 'ANN',
+                            #job_type = 'train'
+    )
     print("wandb initialized")
     
     model = Mixtral(attn_dropout=ModelArgs.attn_dropout, embeddings_dims=ModelArgs.embeddings_dims, no_of_heads=ModelArgs.no_of_heads, block_size=ModelArgs.block_size, dropout=ModelArgs.dropout, no_of_decoder_layers=ModelArgs.no_of_decoder_layers, vocab_size=ModelArgs.vocab_size, device=device)
@@ -877,10 +878,6 @@ def train():
     model = model.to(device)
     
     # model = DDP(model, device_ids=[device])
-    
-
-    
-    
     model.eval()
     world_size = torch.cuda.device_count()
     @torch.inference_mode()
@@ -917,13 +914,16 @@ def train():
                 idx = idx.to(device)
                 targets = targets.to(device)
                 # with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-                    
-                loss = model(idx, actual_labels = targets)
-                    # batch_size, block_size, embeddings_dims = logits.shape
-                    # logits = logits.view(batch_size * block_size, embeddings_dims)
-                    # targets = targets.view(batch_size * block_size)
+                if(ModelArgs.use_liger):
+                    loss = model(idx, actual_labels = targets)
 
-                    # loss = F.cross_entropy(logits, targets, ignore_index=tokenizer.pad_token_id)
+                else:
+                    logits = model(idx)
+                    batch_size, block_size, embeddings_dims = logits.shape
+                    logits = logits.view(batch_size * block_size, embeddings_dims)
+                    targets = targets.view(batch_size * block_size)
+
+                    loss = F.cross_entropy(logits, targets, ignore_index=tokenizer.pad_token_id)
 
                 total_loss += loss.item()
                 total_batches += 1
@@ -1008,28 +1008,28 @@ def train():
                 # Log training loss more frequently
                 # Aggregate average loss across all GPUs
             # avg_train_loss = torch.Tensor([losses['train']]).to(device)
-            avg_val_loss = torch.Tensor([losses['val']]).to(device)
+            # avg_val_loss = torch.Tensor([losses['val']]).to(device)
             # torch.distributed.reduce(avg_train_loss, dst=0, op=torch.distributed.ReduceOp.SUM)
             # torch.distributed.reduce(avg_val_loss, dst=0, op=torch.distributed.ReduceOp.SUM)
             
             # if device == 'cuda:0':
                 # all_gpus_avg_train_loss = avg_train_loss / world_size
                 # print(f"All_GPUs_Train_losses: {all_gpus_avg_train_loss.item():.4f}")
-            all_gpus_avg_val_loss = avg_val_loss / world_size
-            print(f"Val Loss: {all_gpus_avg_val_loss.item():.4f}")
+            # all_gpus_avg_val_loss = avg_val_loss / world_size
+            print(f"Val Loss: {avg_val_loss.item():.4f}")
             
       
             
-            perplexity = torch.exp(torch.tensor(all_gpus_avg_val_loss.item()))  # Calculate perplexity
+            perplexity = torch.exp(torch.tensor(avg_val_loss.item()))  # Calculate perplexity
 
             # if device == 0:
             wandb.log({
-                    "All GPU Val_Loss": all_gpus_avg_val_loss.item(),
+                    "Val_Loss": avg_val_loss.item(),
                     "Val Perplexity": perplexity.item(),
                     "Total Tokens Processed": token_count,
                     "Step": step,
                 })
-            print(f"Step: {step} | All GPU Val Loss: {all_gpus_avg_val_loss.item():.4f} | Perplexity: {perplexity.item():.4f} | Tokens: {token_count}")
+            print(f"Step: {step} | Val Loss: {avg_val_loss.item():.4f} | Perplexity: {perplexity.item():.4f} | Tokens: {token_count}")
             
             
 
@@ -1054,18 +1054,21 @@ def train():
         targets = batch['labels'].to(device)
         token_count += (len(idx) * ModelArgs.batch_size)
         # with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-        loss = model(idx, actual_labels = targets)
-            # batch_size, block_size, embeddings_dims = logits.shape
+        if(ModelArgs.use_liger):
+            loss = model(idx, actual_labels = targets)
+        else:
+            logits = model(idx)
+            batch_size, block_size, embeddings_dims = logits.shape
             # print(logits.shape)   
             # print(targets)
-            # logits = logits.view(batch_size*block_size, embeddings_dims)
+            logits = logits.view(batch_size*block_size, embeddings_dims)
             # print("OK")
-            # targets = targets.view(batch_size * block_size)
+            targets = targets.view(batch_size * block_size)
             # print("OK2")
-            # loss = nn.functional.cross_entropy(logits, targets, ignore_index=tokenizer.pad_token_id)
+            loss = nn.functional.cross_entropy(logits, targets, ignore_index=tokenizer.pad_token_id)
             
         # loss = loss / gradient_accumulation_steps #IDK why div is done here specifically? Maybe think of it in terms of a very big batch being processed and there is need for equal important of each mini batch for the overall big batch
-        # accumulated_loss += loss.detach()
+        accumulated_loss += loss.detach()
         loss.backward() 
         # model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1) # so that we dont synchronize the gradient everytime across the GPU devices
         # scaler.scale(loss).backward()
@@ -1130,13 +1133,13 @@ def train():
         torch.cuda.synchronize() 
         # accumulated_loss = loss
         
-        # torch.distributed.reduce(loss, dst=0, op=torch.distributed.ReduceOp.SUM)
-        loss /= world_size
-        perplexity = torch.exp(torch.tensor(loss.item()))  # Calculate perplexity
+        # torch.distributed.reduce(accumulated_loss, dst=0, op=torch.distributed.ReduceOp.SUM)
+        # accumulated_loss /= world_size
+        perplexity = torch.exp(torch.tensor(accumulated_loss.item()))  # Calculate perplexity
         # if(device == 0):
         wandb.log({
                     "Learning Rate": scheduler.get_last_lr()[0],
-                    "Train_Loss": loss.item(),
+                    "Train_Loss": accumulated_loss.item(),
                     # "Train loss": loss.item(),
                     "Train Perplexity": perplexity.item(),
                     "Total Tokens Processed": token_count,
