@@ -26,6 +26,8 @@ torch.cuda.manual_seed(1337)
 
 from datasets import load_dataset, concatenate_datasets
 from liger_kernel.transformers import LigerLayerNorm
+from liger_kernel.transformers import LigerSwiGLUMLP
+from liger_kernel.transformers import liger_rotary_pos_emb
 from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss
 
 # torch.cuda.set_device('cuda:0')
@@ -73,7 +75,7 @@ class ModelArgs:
     epochs = 4
     block_size = 128
     batch_size = 64 #atleast 512
-    embeddings_dims = 384 #make it 512 when use liger, atleast 768 when uding ampere GPUs
+    embeddings_dims = 512 #make it 512 when use liger, atleast 768 when uding ampere GPUs
     attn_dropout = 0.1
     no_of_heads = 8
     dropout = 0.1
@@ -94,7 +96,7 @@ class ModelArgs:
     experts=8
     top_experts=2
     use_flash_attention = True
-    use_liger = False #make it true
+    use_liger = True #make it true
     use_compile = False 
     use_checkpointing: bool = False
     noisy_topk: bool = False
@@ -241,31 +243,50 @@ class RotaryEmbeddings(nn.Module):
         self.device=device
 
     
-    def apply_rope(self, seq):
+    def apply_rope(self, seq, q=None, k=None):
         batch_size, seq_len, embeds_dims = seq.shape
-        # print(seq.shape)
-        # print(self.embeddings_dims)
-        # self.matrix = torch.zeros((seq_len, self.embeddings_dims, self.embeddings_dims), dtype=torch.float32,  requires_grad=False,  device = self.device)
-        token_idx = torch.arange(0 , seq_len, device = self.device).unsqueeze(1)
-        positions = torch.arange(0 , embeds_dims, 2, device = self.device).unsqueeze(0)
-        # dims = torch.arange(1, self.embeddings_dims // 2,  dtype=torch.float32)
-        theta = 10000 ** (-2 * (positions) / embeds_dims)
-        angles = token_idx * theta
-        angles = angles.expand(seq_len, -1) # because this thing needs to be applied to every sequence in the batch but with embeds dims halved
-        x_reshaped = seq.view(batch_size, seq_len, embeds_dims // 2, 2)
-        
-        cos_angles = torch.cos(angles)
-        sin_angles = torch.sin(angles)
-        # print(cos_angles.shape)
-        # print(sin_angles.shape)
-        # print(x_reshaped.shape)
-        # indices = torch.arange(self.embeddings_dims,  dtype=torch.int64,  device = self.device)
 
-        out = torch.stack([x_reshaped[..., 0]*cos_angles - (x_reshaped[...,1] * sin_angles), x_reshaped[...,1] * cos_angles + x_reshaped[..., 0] * sin_angles], dim=-1)
-        out = out.view(batch_size, seq_len, embeds_dims)
+        if(ModelArgs.use_liger):
+          token_idx = torch.arange(0 , seq_len, device = self.device).unsqueeze(1)
+          positions = torch.arange(0 , embeds_dims, device = self.device).unsqueeze(0)
+          # dims = torch.arange(1, self.embeddings_dims // 2,  dtype=torch.float32)
+          theta = 10000 ** (-2 * (positions) / embeds_dims)
+          angles = token_idx * theta
+          angles = angles.expand(seq_len, -1) # because this thing needs to be applied to every sequence in the batch but with embeds dims halved
+
+          cos = torch.cos(angles)
+          sin = torch.sin(angles)
+          cos = cos.unsqueeze(0)
+          sin = sin.unsqueeze(0)
+          # print(cos.shape)
+          # print(sin.shape)
+          out = liger_rotary_pos_emb(q, k, cos, sin)
+
+        else:
+
+          # print(seq.shape)
+          # print(self.embeddings_dims)
+          # self.matrix = torch.zeros((seq_len, self.embeddings_dims, self.embeddings_dims), dtype=torch.float32,  requires_grad=False,  device = self.device)
+          token_idx = torch.arange(0 , seq_len, device = self.device).unsqueeze(1)
+          positions = torch.arange(0 , embeds_dims, 2, device = self.device).unsqueeze(0)
+          # dims = torch.arange(1, self.embeddings_dims // 2,  dtype=torch.float32)
+          theta = 10000 ** (-2 * (positions) / embeds_dims)
+          angles = token_idx * theta
+          angles = angles.expand(seq_len, -1) # because this thing needs to be applied to every sequence in the batch but with embeds dims halved
+          x_reshaped = seq.view(batch_size, seq_len, embeds_dims // 2, 2)
+          
+          cos_angles = torch.cos(angles)
+          sin_angles = torch.sin(angles)
+          # print(cos_angles.shape)
+          # print(sin_angles.shape)
+          # print(x_reshaped.shape)
+          # indices = torch.arange(self.embeddings_dims,  dtype=torch.int64,  device = self.device)
+
+          out = torch.stack([x_reshaped[..., 0]*cos_angles - (x_reshaped[...,1] * sin_angles), x_reshaped[...,1] * cos_angles + x_reshaped[..., 0] * sin_angles], dim=-1)
+          out = out.view(batch_size, seq_len, embeds_dims)
         return out
 
-    def forward(self, x):
+    def forward(self, x, q=None, k=None):
         # print("X shape: ", x.shape)
         # print("X is: ", x)
         # B,T,C = x.shape
@@ -278,7 +299,7 @@ class RotaryEmbeddings(nn.Module):
 
         #     return matrix
         # if(ModelArgs.inference):
-        res = self.apply_rope(x)
+        res = self.apply_rope(x, q, k)
         return res 
         # else:
             # return self.x_reshaped
@@ -308,9 +329,12 @@ class RotaryAttentionHead(nn.Module):
         key = self.key(x)
         values = self.value(x)
         # matrix = self.rotary_matrix(block_size)
-        rotary_q = self.rope(query)
-        rotary_k = self.rope(key)
-        
+        if(ModelArgs.use_liger == False):
+          rotary_q = self.rope(query)
+          rotary_k = self.rope(key)
+        else:
+
+          rotary_q, rotary_k = self.rope(x, query, key)
         # print(matrix.shape)
         # print(query.shape)
         masked = torch.tril(torch.ones((block_size, block_size),  requires_grad=False,  device = self.device))
@@ -389,19 +413,39 @@ class SWiGLUExpertMoE(nn.Module):
         super().__init__()
 
         self.hidden_dims = embeddings_dims * 2  #Apply this when memory permits
-        self.swish = Swish(block_size=block_size, embeddings_dims=embeddings_dims, device=device)
-        self.linear_layer1 = nn.Linear(in_features=embeddings_dims, out_features=self.hidden_dims,  bias=False, device = device)
-        self.linear_layer2 = nn.Linear(in_features=embeddings_dims, out_features=self.hidden_dims,  bias=False, device = device)
-        self.linear_layer3 = nn.Linear(in_features=self.hidden_dims, out_features=embeddings_dims,  bias=False, device = device)
+
+        if(ModelArgs.use_liger):
+
+          @dataclass
+          class config:
+
+              hidden_size = embeddings_dims
+              intermediate_size = self.hidden_dims
+              hidden_act = 'swish'
+
+          conf = config()
+
+          self.swiglu = LigerSwiGLUMLP(conf)
+        else:
+          self.swish = Swish(block_size=block_size, embeddings_dims=embeddings_dims, device=device)
+          self.linear_layer1 = nn.Linear(in_features=embeddings_dims, out_features=self.hidden_dims,  bias=False, device = device)
+          self.linear_layer2 = nn.Linear(in_features=embeddings_dims, out_features=self.hidden_dims,  bias=False, device = device)
+          self.linear_layer3 = nn.Linear(in_features=self.hidden_dims, out_features=embeddings_dims,  bias=False, device = device)
 
 
 
 
     def forward(self, x):
-        swish_res = self.swish(self.linear_layer1(x))
-        x_V = self.linear_layer2(x)
-        res = torch.mul(swish_res, x_V)
-        out = self.linear_layer3(res)
+        if(ModelArgs.use_liger == False):
+          swish_res = self.swish(self.linear_layer1(x))
+          x_V = self.linear_layer2(x)
+          res = torch.mul(swish_res, x_V)
+          out = self.linear_layer3(res)
+
+        else:
+          out = self.swiglu(x)
+          # out = self.linear_layer2(out)
+          # out = self.linear_layer3(out)
         return out
 
 
@@ -485,16 +529,18 @@ class AttentionHead(nn.Module):
             self.rotary= RotaryEmbeddings(embeddings_dims=self.head_size,  device = device)
         if(ModelArgs.use_flash_attention):
             self.rotary= RotaryEmbeddings(embeddings_dims=embeddings_dims,  device = device)
+        if(ModelArgs.use_liger):
+            self.rope = RotaryEmbeddings(embeddings_dims=embeddings_dims,  device = device)
             
     def forward(self, x):
         batch_size, block_size, embd_dims = x.shape
         if(ModelArgs.use_flash_attention == False):
+          if(ModelArgs.use_liger == False):
             k = self.keys(x)
             q = self.query(x)
             v = self.values(x)
-            k = self.rotary(k)
-            q = self.rotary(q)
-        # if(use_flash_attention == False):
+            q = self.rope(q)
+            k = self.rope(k)
             masked_table = torch.tril(torch.ones(block_size, block_size, device=ModelArgs.device))
             weights = q @ torch.transpose(k, dim0=-2, dim1=-1) * (k.shape[-1] ** -0.5)
             masked_values = weights.masked_fill(masked_table[: block_size, : block_size] == 0, float('-inf'))
@@ -502,18 +548,24 @@ class AttentionHead(nn.Module):
             weights_normalized = self.dropout(weights_normalized)
             out = weights_normalized @ v
             return out
+          # else:
+            
+
         else:
             qkv = self.qkv_proj(x)
             q, k, v = qkv.chunk(3, dim=-1)
-            k = self.rotary(k)
-            q = self.rotary(q)
+            # k = self.rotary(k)
+            # q = self.rotary(q)
             q = q.view(batch_size, block_size, self.no_of_heads, self.head_size).transpose(1, 2)
             k = k.view(batch_size, block_size, self.no_of_heads, self.head_size).transpose(1, 2)
             v = v.view(batch_size, block_size, self.no_of_heads, self.head_size).transpose(1, 2)
-            
+            q, k = self.rope(x, q, k)
+            # print(q.shape)
+            # print(k.shape)
             out = torch.nn.functional.scaled_dot_product_attention(
                 q, k, v, dropout_p=ModelArgs.dropout, is_causal=True
             )
+
             # Properly merge heads
             out = out.transpose(1, 2).contiguous().view(batch_size, block_size, -1)
             return out
@@ -916,7 +968,7 @@ def train():
                 targets = batch['labels']
                 idx = idx.to(device)
                 targets = targets.to(device)
-                with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                with torch.autocast(device_type='cuda', dtype=torch.float16):
                     if(ModelArgs.use_liger):
                         loss = model(idx, actual_labels = targets)
                     else:
@@ -1063,7 +1115,7 @@ def train():
 
             targets = batch['labels'].to(device)
             token_count += (len(idx) * ModelArgs.batch_size)
-            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+            with torch.autocast(device_type='cuda', dtype=torch.float16):
                 if(ModelArgs.use_liger):
                     loss = model(idx, actual_labels = targets)
                 else:
