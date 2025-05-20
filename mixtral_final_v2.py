@@ -61,7 +61,7 @@ def cleanup():
 
 
 
-tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf", token = TOKEN)
+tokenizer = AutoTokenizer.from_pretrained("use mixtral one", token = TOKEN)
 
 tokenizer.add_special_tokens({'pad_token': '[PAD]'})
 

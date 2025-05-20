@@ -2,7 +2,7 @@
 # Introducing StoryMoE - A Smaller MoE based Language Model for Bedtime Stories! 
 
 - So, I trained a MoE based a 124M (8x12M) architecture I coded from ground up to build a small instruct model, going through the below-mentioned stages from scratch.
-- Trained on TiyStories dataset form HuggingFace consisting of 1M tokens for a total of 14000 steps
+- Trained on TiyStories dataset form HuggingFace consisting of 1M texts for a total of 14000 steps
 
 
 
