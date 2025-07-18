@@ -34,8 +34,8 @@ Provided under the `generated_data/` directory, these examples showcase the mode
 ## Model Architecture
 
 ### Default Configuration
-- **Embedding Dimensions**: 512
-- **Decoder Layers**: 8
+- **Embedding Dimensions**: 768
+- **Decoder Layers**: 12
 - **Attention Heads**: 8
 - **MoE Experts**: 8 (top-2 routing)
 - **Block Size**: 1024 tokens
@@ -50,7 +50,7 @@ Provided under the `generated_data/` directory, these examples showcase the mode
 - `batch_size`: Training batch size (default: 16)
 - `embeddings_dims`: Model embedding dimensions (default: 512)
 - `no_of_heads`: Number of attention heads (default: 8)
-- `no_of_decoder_layers`: Number of decoder layers (default: 8)
+- `no_of_decoder_layers`: Number of decoder layers (default: 12)
 - `attn_dropout`: Attention dropout rate (default: 0.1)
 - `dropout`: General dropout rate (default: 0.1)
 
