@@ -1,202 +1,282 @@
 
-# Introducing StoryMoE - A Smaller MoE based Language Model for Bedtime Stories! 
+# StoryMixtral - Mixtral Inspired Model
 
-- So, I trained a MoE based a 124M (8x12M) architecture I coded from ground up to build a small instruct model, going through the below-mentioned stages from scratch.
-- Trained on TiyStories dataset form HuggingFace consisting of 1M texts for a total of 14000 steps
+A PyTorch implementation of a Mixtral inspired transformer model with Mixture of Experts (MoE), designed for text generation and understanding tasks. This model is built on the Mixtral architecture with enhancements like Flash Attention, SWiGLU activation, and Liger kernels for optimized performance.
 
+## Examples
 
+Provided under the `generated_data/` directory, these examples showcase the model's capabilities in text generation and understanding.
 
- ###  Pretraining
+![StoryMixtral Model](images/image.png)
 
-#### Dataset
+## 📊 Training Results & Model Weights
 
- - I used the [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories) dataset from HuggingFace.
+**📈 View Training Report**: [StoryMixtral Training Results on WandB](https://wandb.ai/rentio/Mixtral-DDP-Pretrain-10-billion-tokens/reports/StoryMixtral--VmlldzoxMzYyNzc0OQ?accessToken=nybd4lxybsbq5k5fh2dqjcucdawilt3fossn583wv6jiu8tbdzcybiihe7rhsqmq)
 
-  1) Train dataset - 2 M records approx
-  2) Val dataset - 26K records approx
+**💾 Download Pre-trained Weights**: 
+- **Hugging Face Model**: [YuvrajSingh9886/StoryMixtral](https://huggingface.co/YuvrajSingh9886/StoryMixtral)
+- **WandB Checkpoints**: Check the WandB report above for additional trained model checkpoints
 
+## Features
 
+- **Flash Attention**: Efficient attention mechanism with memory optimization
+- **Mixture of Experts (MoE)**: 8 experts with top-2 routing and noisy top-k support
+- **SWiGLU Activation**: Advanced activation function in expert layers
+- **Rotary Positional Embeddings**: Position encoding for sequence understanding
+- **Liger Kernels**: Optimized kernels for faster training (optional)
+- **Distributed Training**: Support for multi-GPU training with DDP
+- **Advanced Optimizer**: AdamW optimizer with custom learning rate scheduling
+- **Gradio Interface**: Interactive web interface for text generation
 
----
+## Model Architecture
 
-####  ModelArgs (Hyperparameters)
-# Model Configuration (`ModelArgs`)
+### Default Configuration
+- **Embedding Dimensions**: 512
+- **Decoder Layers**: 8
+- **Attention Heads**: 8
+- **MoE Experts**: 8 (top-2 routing)
+- **Block Size**: 1024 tokens
+- **Vocabulary Size**: Based on Llama-2-7b tokenizer (~32,000 tokens)
+- **Batch Size**: 16
 
-This dataclass defines hyperparameters and configuration settings for a neural network model, optimized for modern deep learning tasks.
+### Full Parameter List
 
-## Hyperparameters Overview
+#### Model Architecture Parameters
+- `epochs`: Number of training epochs (default: 4)
+- `block_size`: Maximum sequence length (default: 1024)
+- `batch_size`: Training batch size (default: 16)
+- `embeddings_dims`: Model embedding dimensions (default: 512)
+- `no_of_heads`: Number of attention heads (default: 8)
+- `no_of_decoder_layers`: Number of decoder layers (default: 8)
+- `attn_dropout`: Attention dropout rate (default: 0.1)
+- `dropout`: General dropout rate (default: 0.1)
 
-### Architecture
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `block_size` | 256 | Context window length for sequential data |
-| `embeddings_dims` | 512 | Dimension size for embeddings |
-| `no_of_heads` | 8 | Number of attention heads in multi-head attention |
-| `no_of_decoder_layers` | 8 | Number of transformer decoder layers |
-| `vocab_size` | 32768 | Vocabulary size (recommended as power of 2) |
+#### Mixture of Experts (MoE) Parameters
+- `experts`: Number of MoE experts (default: 8)
+- `top_experts`: Number of experts to route to (default: 2)
+- `noisy_topk`: Use noisy top-k routing (default: False)
 
-### Training
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `epochs` | 4 | Total training epochs |
-| `batch_size` | 64 | Samples per batch |
-| `val_epochs` | 2 | Validation frequency (in epochs) |
-| `clip` | 1.0 | Gradient clipping threshold |
+#### Training Hyperparameters
+- `max_lr`: Maximum learning rate (default: 6e-4)
+- `weight_decay_optim`: Weight decay for optimizer (default: 0.01)
+- `beta_1`: Beta1 for optimizer (default: 0.9)
+- `beta_2`: Beta2 for optimizer (default: 0.95)
+- `eps`: Epsilon for optimizer (default: 1e-8)
+- `clip`: Gradient clipping value (default: 1.0)
 
-### Regularization
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `attn_dropout` | 0.1 | Dropout probability for attention layers |
-| `dropout` | 0.1 | General dropout probability |
+#### System Configuration
+- `device`: Device to use (default: 'cuda:9')
+- `use_checkpointing`: Use gradient checkpointing (default: False)
+- `use_liger`: Use Liger kernels for optimization (default: True)
+- `use_flash_attention`: Use Flash Attention (default: True)
+- `use_compile`: Use torch.compile (default: True)
 
-### Optimization
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `max_lr` | 1e-4 | Maximum learning rate |
-| `weight_decay_optim` | 0.01 | L2 regularization strength |
-| `beta_1` | 0.9 | AdamW first momentum factor |
-| `beta_2` | 0.95 | AdamW second momentum factor |
+#### Data Configuration
+- `vocab_size`: Vocabulary size (default: based on tokenizer + 768)
+- `val_epochs`: Validation frequency (default: 2)
 
-### Mixture-of-Experts (MoE)
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `experts` | 8 | Total number of experts in MoE layer |
-| `top_experts` | 2 | Number of active experts per token |
-| `noisy_topk` | False | Enable noisy top-k expert selection |
+## Quick Start
 
-### Hardware
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `device` | 'cuda' | Training accelerator (GPU/CPU) |
-| `dtype` | auto | Floating precision (bfloat16/float16) |
-| `use_checkpointing` | True | Enable gradient checkpointing |
+### Installation
 
-
- - Used P100 on Kaggle
----
-
-#### Frameworks:
-**Pytorch**
-
-
---- 
-
-#### Epochs/Steps
-- Iterations (train) = 14k 
-
-- Val iterations = every 50 steps
----
-
-#### Losses
-- Train loss - 2.08
-
-- Val loss - 1.7
-
----
-
-#### Screenshots of the loss curves
-
-- Loss Curves (Train and Val)
-
-![Loss Curves (Train and Val)](data/loss.jpg)
-
---- 
-#### Output
-
-```python
-/data/generations.txt
+```bash
+chmod +x install.sh
+./install.sh
 ```
 
----
+### Important: Hugging Face Token Setup
 
-<!-- ### Local setup
+Since this model uses the Llama-2 tokenizer, you'll need a Hugging Face token to access the gated model. 
 
+1. **Get a Hugging Face Token:**
+   - Go to [Hugging Face Settings](https://huggingface.co/settings/tokens)
+   - Create a new token with "Read" permissions
+   - Accept the Llama-2 license at [meta-llama/Llama-2-7b-hf](https://huggingface.co/meta-llama/Llama-2-7b-hf)
 
-### Requirements
+2. **Set your token in config.py:**
+   ```python
+   TOKEN = 'your_token_here'
+   ```
 
+### Using Pre-trained Weights
 
+1. **Download Model Weights**: 
+   - **Option 1**: Download from [Hugging Face - YuvrajSingh9886/StoryMixtral](https://huggingface.co/YuvrajSingh9886/StoryMixtral)
+   - **Option 2**: Visit the [WandB Training Report](https://wandb.ai/rentio/Mixtral-DDP-Pretrain-10-billion-tokens) for additional checkpoints
+   - Place downloaded files in the `checkpoints/` directory
 
-```python
-git [clone the repo](https://github.com/YuvrajSingh-mist/StoryLlama.git)
-cd StoryLlama
-bash ./install.sh
+2. **Load Pre-trained Model for Inference**:
+   ```bash
+   # Using the Gradio web interface
+   cd gradio
+   python app.py
+   
+   # Or use in your own code
+   python inference.py
+   ```
 
+### Training Examples
+
+#### Basic Training (Single GPU)
+```bash
+python trainer.py
 ```
-- A wandb.ai account for plotting graphs for your loss curves
 
-- On your terminal run
-```python
-wandb login
+#### Training with Custom Parameters
+```bash
+# Train with larger model (modify config.py)
+python trainer.py
+
+# Train with different dataset (modify data.py)
+python trainer.py
 ```
 
-- Enter the api key and follow the instructions and once you are succesfully logged in follow the given steps
+#### Multi-GPU Distributed Training
+```bash
+# 2 GPUs
+torchrun --nproc_per_node=2 trainer.py
 
+# 4 GPUs
+torchrun --nproc_per_node=4 trainer.py
 
-- Download the model
+# 8 GPUs
+torchrun --nproc_per_node=8 trainer.py
+```
+
+### Inference with Gradio
+
+**HF_TOKEN** should be set in `config.py` to use the Gradio interface. Moreover, set your token as follows:
 
 ```python
-cd gradio/
+ export HF_TOKEN=<TOKEN_HERE>
+```
 
+
+```bash
+# Run the Gradio app
+cd gradio
+python app.py
+
+# With custom checkpoint (edit app.py to point to your checkpoint)
+cd gradio
 python app.py
 ```
 
+## File Structure
 
----
+```
+StoryMixtral/
+├── config.py          # Model configuration and hyperparameters
+├── model.py           # Model architecture (Mixtral, MoE, Attention, etc.)
+├── data.py           # Data loading and preparation
+├── inference.py      # Inference functions and text generation
+├── trainer.py        # Main training loop with DDP support
+├── install.sh        # Setup script
+├── requirements.txt  # Python dependencies
+├── model_summary.py  # Model architecture summary
+├── gradio/
+│   └── app.py        # Gradio web interface
+├── checkpoints/      # Model checkpoints
+├── generated_data/   # Generated text outputs
+├── images/           # Project images
+└── old/             # Original files
+```
 
-### Running 
 
 
-#### Training a model
+## Training Features
 
-- Kindly change 'device' to any of your available cuda gpus.
+- **Gradient Accumulation**: Configurable batch size scaling
+- **Learning Rate Scheduling**: Cosine decay with warmup
+- **Gradient Clipping**: Prevents gradient explosion
+- **Wandb Integration**: Experiment tracking and logging
+- **Checkpointing**: Regular model checkpoints during training
+- **Loss Calculation**: Optimized cross-entropy with padding token handling
+- **Distributed Training**: Multi-GPU support with DDP
+- **Memory Optimization**: Gradient checkpointing support
 
-To run:
+## Generation Methods
+
+1. **Top-k Sampling**: Traditional sampling with temperature control
+
+## Advanced Usage
+
+### Configuration
+All parameters can be configured by modifying `config.py`:
 
 ```python
-bash ./install.sh
+@dataclass
+class ModelArgs:
+    epochs = 4
+    block_size = 1024
+    batch_size = 16
+    embeddings_dims = 512
+    # ... other parameters
 ```
 
+### Custom Dataset Training
+Modify `data.py` to use different datasets:
 ```python
-torchrun --standalone --nproc_per_node=gpu trainer.py \
-    --epochs 10 \
-    --block_size 256 \
-    --batch_size 128 \
-    --embeddings_dims 768 \
-    --attn_dropout 0.2 \
-    --no_of_heads 12 \
-    --dropout 0.2 \
-    --val_epochs 3 \
-    --max_lr 5e-4 \
-    --no_of_decoder_layers 6 \
-    --weight_decay_optim 0.01 \
-    --beta_1 0.85 \
-    --beta_2 0.99 \
-    --clip 0.5 \
-    --device "cuda" \
-    --no_kv_heads 4 \
-    --vocab_size 50257 \
-    --eps 1e-6 \
-    --dtype "float16" \
-    --save_checkpoint_dir "model_checkpoints" \
-    --prompt "Once upon a time" \
-    --save_checkpoint_iter 100 \
-    --total_iters 5000 \
-    --eval_iters 200 \
-    --eval_check 500 \
-    --warmup_iters 1000 \
-    --min_lr 1e-5 \
-    --lr_decay_iters 2000 \
-    --total_batch_size 262144 \
-    --micro_batch_size 128 \
-    --gradient_accumulation_steps 4
+# TinyStories (default)
+tinystories = True
+fw = False
 
+# FineWeb
+tinystories = False
+fw = True
 ```
---standalone - if all the gpu are on one server
---npro_per_node - number of gpus available and use the keyword gpu to use all
 
-#### Inference on a model
+### Monitoring and Logging
+Training automatically logs to WandB with project name "Mixtral-DDP-Pretrain-10-billion-tokens"
 
-```python 
-python inference.py --prompt "Once upon a time" --max_length 100 --temperature 0.8 --topk 50 
+## Performance Tips
+
+1. **Use Liger Kernels**: Keep `use_liger = True` for optimized operations
+2. **Flash Attention**: Keep `use_flash_attention = True` for memory efficiency
+3. **Gradient Checkpointing**: Use `use_checkpointing = True` for memory-constrained setups
+4. **Batch Size Tuning**: Start with smaller batch sizes and increase gradually
+5. **Block Size**: Larger block sizes improve quality but require more memory
+
+## Troubleshooting
+
+### Common Issues
+
+#### Authentication Error (401)
+```bash
+# Make sure you have accepted the Llama-2 license and have a valid token
+# Visit: https://huggingface.co/meta-llama/Llama-2-7b-hf
+# Then set your token in config.py
 ```
- -->
+
+#### Out of Memory (OOM)
+```python
+# Reduce batch size and enable checkpointing in config.py
+batch_size = 8
+use_checkpointing = True
+```
+
+#### Slow Training
+```python
+# Enable optimizations in config.py
+use_liger = True
+use_flash_attention = True
+use_compile = True
+```
+
+## Contributing
+
+Feel free to contribute improvements, bug fixes, or new features!
+
+## Requirements
+
+- Python 3.8+
+- PyTorch 2.0+
+- Transformers
+- Datasets
+- Gradio
+- Wandb
+- Liger-kernel (optional)
+
+## License
+
+MIT License

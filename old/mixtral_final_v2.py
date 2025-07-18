@@ -17,7 +17,7 @@ import torch.optim as optim
 
 from transformers import AutoTokenizer
 import os
-from torch.utils.checkpoint import checkpoint
+# from torch.utils.checkpoint import checkpoint
 # from dotenv import load_dotenv
 
 torch.manual_seed(1337)
@@ -61,7 +61,7 @@ def cleanup():
 
 
 
-tokenizer = AutoTokenizer.from_pretrained("use mixtral one", token = TOKEN)
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf", token = TOKEN)
 
 tokenizer.add_special_tokens({'pad_token': '[PAD]'})
 
@@ -73,8 +73,8 @@ class ModelArgs:
     #Hyperparameters
     
     epochs = 4
-    block_size = 128
-    batch_size = 64 #atleast 512
+    block_size = 1024
+    batch_size = 16 #atleast 512
     embeddings_dims = 512 #make it 512 when use liger, atleast 768 when uding ampere GPUs
     attn_dropout = 0.1
     no_of_heads = 8
@@ -82,22 +82,22 @@ class ModelArgs:
     # epochs = 100
     val_epochs = 2
     max_lr = 6e-4
-    no_of_decoder_layers = 8 #IMP needs to be thoroughly calculated
+    no_of_decoder_layers = 12 #IMP needs to be thoroughly calculated
     weight_decay_optim = 0.01
     beta_1 = 0.9
     beta_2 = 0.95
     clip = 1.0
-    device = 'cuda'
+    device = 'cuda:2'
     # no_kv_heads = 2
-    vocab_size = len(tokenizer) + 768 #powers of 2 so nice!
-    eps = 1e-5
-    dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' 
+    vocab_size = len(tokenizer.get_vocab()) #powers of 2 so nice!
+    eps = 1e-8
+    # dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' 
 #     dtype = 'bfloat16'
     experts=8
     top_experts=2
     use_flash_attention = True
     use_liger = True #make it true
-    use_compile = False 
+    use_compile = True 
     use_checkpointing: bool = False
     noisy_topk: bool = False
 
@@ -106,11 +106,11 @@ def _save_snapshot(model, optimizer, scheduler, epoch, step):
     snapshot = {
         "MODEL_STATE": model.module.state_dict() if hasattr(model, 'module') else model.state_dict(),
         "OPTIMIZER_STATE": optimizer.state_dict(),
-        "SCHEDULER_STATE": scheduler.state_dict(),  
+        # "SCHEDULER_STATE": scheduler.state_dict(),  
         "EPOCHS_RUN": epoch,
         "STEP_RUN": step
     }
-    torch.save(snapshot, f"/kaggle/working/snapshot_{step}.pt")
+    torch.save(snapshot, f"snapshot_{step}.pt")
     print(f"Epoch: {epoch} | Step: {step} | Snapshot saved.")
 
 def _load_snapshot(snapshot_path, model, optimizer, scheduler):
@@ -125,6 +125,36 @@ def _load_snapshot(snapshot_path, model, optimizer, scheduler):
     return epoch, step
 
 
+
+with open('data/input.txt', 'r', encoding='utf-8') as f:
+    text = f.read()
+    
+chars = sorted(list(set(text)))
+vocab_size = len(chars)
+
+
+# create a mapping from characters to integers
+stoi = { ch: i for i,ch in enumerate(chars) }
+itos = { i:ch for i,ch in enumerate(chars) }
+encode = lambda s: [stoi[c] for c in s] # encoder: take a string, output a list of integers
+decode = lambda l: ''.join([itos[i] for i in l]) # decoder: take a list of integers, output a string
+
+
+# Train and test splits
+data = torch.tensor(encode(text), dtype=torch.long)
+n = int(0.9*len(data)) # first 90% will be train, rest val
+train_data = data[:n]
+val_data = data[n:]
+
+# data loading
+def get_batch(split):
+    # generate a small batch of data of inputs x and targets y
+    data = train_data if split == 'train' else val_data
+    ix = torch.randint(len(data) - ModelArgs.block_size, (ModelArgs.batch_size,))
+    x = torch.stack([data[i:i+ModelArgs.block_size] for i in ix])
+    y = torch.stack([data[i+1:i+ModelArgs.block_size+1] for i in ix])
+    x, y = x.to(ModelArgs.device), y.to(ModelArgs.device)
+    return x, y
 
 
 
@@ -165,7 +195,7 @@ def prepare_dataset(split, device, batch_size):
     if(tinystories):
         if(split == 'train'):
             data_loader = DataLoader(
-            train_data,
+            fw_train,
             # generator=generator,
             batch_size=batch_size,
              
@@ -178,7 +208,7 @@ def prepare_dataset(split, device, batch_size):
         )
         elif(split == 'val'):
             data_loader = DataLoader(
-            val_data,
+            fw_test,
 
             batch_size=batch_size,
             # sampler=DistributedSampler(val_data),
@@ -673,6 +703,7 @@ class Mixtral(nn.Module):
                 x = checkpoint(layer, x)
             else:
                 x = layer(x)
+        # x = 2  * ((1.0 / math.sqrt(ModelArgs.no_of_decoder_layers))) * x
         x = self.layer_norm(x)
         if(inference):
             out = self.linear_layer(x)
@@ -703,7 +734,7 @@ def topk_sampling(model, prompt, device, max_length=50, top_k=50, temperature=1.
     input_ids_len = len(input_ids[0])
     
     generated_tokens = []
-    ModelArgs.inference=True
+
     for _ in range(max_length - input_ids_len):
         with torch.no_grad():
             outputs = model(input_ids, inference=True)
@@ -734,31 +765,31 @@ def topk_sampling(model, prompt, device, max_length=50, top_k=50, temperature=1.
     return tokenizer.decode(input_ids[0], skip_special_tokens=True)
 
 
-# model = Mixtral(attn_dropout=ModelArgs.attn_dropout, embeddings_dims=ModelArgs.embeddings_dims, no_of_heads=ModelArgs.no_of_heads, block_size=ModelArgs.block_size, dropout=ModelArgs.dropout, no_of_decoder_layers=ModelArgs.no_of_decoder_layers, vocab_size=ModelArgs.vocab_size, device=ModelArgs.device)
-# model = model.to(ModelArgs.device)
+model = Mixtral(attn_dropout=ModelArgs.attn_dropout, embeddings_dims=ModelArgs.embeddings_dims, no_of_heads=ModelArgs.no_of_heads, block_size=ModelArgs.block_size, dropout=ModelArgs.dropout, no_of_decoder_layers=ModelArgs.no_of_decoder_layers, vocab_size=ModelArgs.vocab_size, device=ModelArgs.device)
+model = model.to(ModelArgs.device)
 
 # Printing a summary of the architecture
 # !pip install torchinfo
-# from torchinfo import summary
+from torchinfo import summary
 # idx, targets = get_batch('test')
 # ModelArgs.use_liger = False
-# idx = torch.randint(
-#         low=0,
-#         high=ModelArgs.vocab_size,
-#         size=(ModelArgs.batch_size, ModelArgs.block_size),
-#         dtype=torch.long
-#     )
+idx = torch.randint(
+        low=0,
+        high=ModelArgs.vocab_size,
+        size=(ModelArgs.batch_size, ModelArgs.block_size),
+        dtype=torch.long
+    )
 # # sample_idx = random.randint(range(len(train_dataset)))
 # # idx, targets = train_dataset[0]
-# idx = idx.to(ModelArgs.device)
+idx = idx.to(ModelArgs.device)
 # # print("hre")
 # # targets = targets.to(ModelArgs.device)
-# summary(model=model,
-#         input_data=idx,
-#         # input_size=(ModelArgs.batch_size, ModelArgs.block_size, ModelArgs.embeddings_dims),
-#         col_names=["input_size", "output_size", "num_params", "trainable"],
-#         col_width=20,
-#         row_settings=["var_names"])
+print(summary(model=model,
+        input_data=idx,
+        # input_size=(ModelArgs.batch_size, ModelArgs.block_size, ModelArgs.embeddings_dims),
+        col_names=["input_size", "output_size", "num_params", "trainable"],
+        col_width=20,
+        row_settings=["var_names"]))
 # ModelArgs.use_liger = True
 
 def find_unused_parameters(model):
@@ -773,7 +804,7 @@ def find_unused_parameters(model):
 
 def save_to_file(step, text):
     
-    with open('generations.txt', 'a') as f:
+    with open(f'/generations_{step}.txt', 'w') as f:
         f.write(f"------------------------------------------------Step: {step}--------------------------------------------\n\n")
         f.write(text + "\n\n")
         
@@ -790,21 +821,18 @@ torch.set_float32_matmul_precision('high')
 
 # scaler = torch.amp.GradScaler(enabled=(ModelArgs.dtype == 'float16'))
 
-save_checkpoint_iter = 1000
+save_checkpoint_iter = 2000
 total_iters = 20000
-eval_iters = 500 #should be at 1000
-eval_check = 100
+eval_iters = 200 #should be at 1000
+eval_check = 200
 warmup_iters = 1000
 min_lr = 0.1 * ModelArgs.max_lr
 lr_decay_iters = 20000
 total_batch_size = 524288
 micro_batch_size = ModelArgs.batch_size
-gradient_accumulation_steps = total_batch_size // (micro_batch_size * (ModelArgs.block_size * torch.cuda.device_count()))
+gradient_accumulation_steps = total_batch_size // (micro_batch_size * (ModelArgs.block_size * 1))
 
 # learning rate decay scheduler (cosine with warmup) from https://github.com/karpathy/nanoGPT/blob/master/train.py
-
-
-
 
 class CustomLRScheduler:
     def __init__(self, optimizer, warmup_iters, lr_decay_iters, min_lr, max_lr):
@@ -828,10 +856,7 @@ class CustomLRScheduler:
     
     def _get_lr(self):
 
-        # cycle = math.floor(1 + self.it / (2 * self.warmup_iters))
-        # x = abs(self.it / self.warmup_iters - 2 * cycle + 1)
-        # return self.min_lr + (self.max_lr - self.min_lr) * max(0, (1 - x))
-        
+      
         # 1) linear warmup for warmup_iters steps
         if self.it < self.warmup_iters:
             return self.max_lr * (self.it + 1) / (self.warmup_iters + 1)
@@ -862,42 +887,12 @@ class CustomLRScheduler:
 
 
 
-# def get_lr_scheduler(optimizer, warmup_iters, lr_decay_iters, min_lr, max_lr):
-#     def get_lr(it):
-#         # 1) Linear warmup from 0 to max_lr
-#         if it < warmup_iters:
-#             return max_lr * (it / warmup_iters)
-        
-#         # 2) If past decay phase, return min_lr
-#         if it > lr_decay_iters:
-#             return min_lr
-        
-#         # 3) Cosine decay from max_lr to min_lr
-#         decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
-#         assert 0 <= decay_ratio <= 1
-#         coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-        
-#         return min_lr + coeff * (max_lr - min_lr)
-    
-#     return torch.optim.lr_scheduler.LambdaLR(optimizer, get_lr)
 
 
 def train():
-    # setup()
-    # device = int(os.environ["LOCAL_RANK"])
-    # device = 0
-    # torch.cuda.set_device(int(device))
-    # torch.set_default_device('cuda')
-    # train_dataloader = prepare_dataset(ModelArgs.batch_size)
-    # rank = torch.distributed.get_rank()
-    # print(f"Start running DDP on rank {device}.")
-    # # create model and move it to GPU with id rank
-    # device_id = rank % torch.cuda.device_count()
-    # CFG = ModelArgs()
-
-    # if(device == 0):
-    print("dtype: ", ModelArgs.dtype)
-    device='cuda:0'
+  
+    # print("dtype: ", ModelArgs.dtype)
+    # device='cuda:0'
     
 #         # Initialise run
     wandb.init(
@@ -910,7 +905,7 @@ def train():
 )
     print("wandb initialized")
     
-    model = Mixtral(attn_dropout=ModelArgs.attn_dropout, embeddings_dims=ModelArgs.embeddings_dims, no_of_heads=ModelArgs.no_of_heads, block_size=ModelArgs.block_size, dropout=ModelArgs.dropout, no_of_decoder_layers=ModelArgs.no_of_decoder_layers, vocab_size=ModelArgs.vocab_size, device=device)
+    model = Mixtral(attn_dropout=ModelArgs.attn_dropout, embeddings_dims=ModelArgs.embeddings_dims, no_of_heads=ModelArgs.no_of_heads, block_size=ModelArgs.block_size, dropout=ModelArgs.dropout, no_of_decoder_layers=ModelArgs.no_of_decoder_layers, vocab_size=ModelArgs.vocab_size, device=ModelArgs.device)
     
     # print(f"Model on device {device} is ready")
     # print(f"Model on device {device} is ready")
@@ -921,12 +916,12 @@ def train():
         betas=(ModelArgs.beta_1, ModelArgs.beta_2),
         weight_decay=ModelArgs.weight_decay_optim,
         eps=ModelArgs.eps,
-        fused=True
+        
     )
     if(ModelArgs.use_compile):
-        model = torch.compile(model,  mode='max-autotune')
+        model = torch.compile(model)
 
-    model = model.to(device)
+    model = model.to(ModelArgs.device)
     
     # model = DDP(model, device_ids=[device])
     
@@ -968,19 +963,19 @@ def train():
                 targets = batch['labels']
                 idx = idx.to(device)
                 targets = targets.to(device)
-                with torch.autocast(device_type='cuda', dtype=torch.float16):
-                    if(ModelArgs.use_liger):
-                        loss = model(idx, actual_labels = targets)
-                    else:
-                        logits = model(idx)
-                        batch_size, block_size, embeddings_dims = logits.shape
-                        # print(logits.shape)   
-                        # print(targets)
-                        logits = logits.view(batch_size*block_size, embeddings_dims)
-                        # print("OK")
-                        targets = targets.view(batch_size * block_size)
-                        # print("OK2")
-                        loss = nn.functional.cross_entropy(logits, targets, ignore_index=tokenizer.pad_token_id)
+                # with torch.autocast(device_type=ModelArgs.device, dtype=torch.bfloat16):
+                if(ModelArgs.use_liger):
+                    loss = model(idx, actual_labels = targets)
+                else:
+                    logits = model(idx)
+                    batch_size, block_size, embeddings_dims = logits.shape
+                    # print(logits.shape)   
+                    # print(targets)
+                    logits = logits.view(batch_size*block_size, embeddings_dims)
+                    # print("OK")
+                    targets = targets.view(batch_size * block_size)
+                    # print("OK2")
+                    loss = nn.functional.cross_entropy(logits, targets, ignore_index=tokenizer.pad_token_id)
                     # batch_size, block_size, embeddings_dims = logits.shape
                     # logits = logits.view(batch_size * block_size, embeddings_dims)
                     # targets = targets.view(batch_size * block_size)
@@ -1008,8 +1003,8 @@ def train():
     model.train()
     count = 0
    
-    train_dataloader = prepare_dataset('train', device, ModelArgs.batch_size)
-    val_loader= prepare_dataset('val', device, ModelArgs.batch_size)
+    train_dataloader = prepare_dataset('train', ModelArgs.device, ModelArgs.batch_size)
+    val_loader= prepare_dataset('val',ModelArgs. device, ModelArgs.batch_size)
     # for step in tqdm(range(total_iters)):
     # for epoch in range(ModelArgs.epochs):
         # torch.cuda.synchronize() 
@@ -1041,81 +1036,84 @@ def train():
     # print("Length of : ", len(train_dataloader))
     # print("Length of val: ", len(val_loader))
     # for  step, batch in enumerate(train_dataloader):
-    for step in tqdm(range(total_iters)):
-        # print("Dataloader things: ", batch)
-        # print("Total batches: ", len(train_dataloader))
-        
-        
-        # if(device == 'cuda:0'):
-    # if(step % 100 == 0):
-#     if(step == train_loader_length):
-#       break
-        print("Step : ", step, "/", total_iters)
-        # print('Total batches: ', len(train_dataloader))
-        print("Total gradient accumulation steps: ", gradient_accumulation_steps)
-        print("Total tokens processed: ", token_count)
-        
-        # all_gpus_avg_train_loss = None
-        # all_gpus_avg_val_loss = None
-        # every once in a while evaluate the loss on train and val sets
-        if (step  % eval_iters == 0 and step != 0) or step == total_iters - 1:
-            losses = estimate_loss( val_loader, val_data_iterator, 'cuda')
-            # avg_train_loss = losses['train']
-            avg_val_loss = losses['val']
-            # print(f"step {step}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-            # if device == 0:  # Only print on main process
-            print(f"[GPU {device}] | Step: {step} / {total_iters} | Val Loss: {losses['val']:.4f}")
-            # print(f"[GPU {device}] | Epoch {epoch}/{ModelArgs.epochs}| |Step: {step} | Train Loss: {losses['train']:.4f}")
+    for epoch in range(epochs):
+        print(f"Epoch {epoch + 1}/{epochs}")
+
+        for step in tqdm(range(total_iters)):
+            # print("Dataloader things: ", batch)
+            # print("Total batches: ", len(train_dataloader))
+            
+            
+            # if(device == 'cuda:0'):
+        # if(step % 100 == 0):
+    #     if(step == train_loader_length):
+    #       break
+            print("Step : ", step, "/", total_iters)
+            # print('Total batches: ', len(train_dataloader))
+            print("Total gradient accumulation steps: ", gradient_accumulation_steps)
+            print("Total tokens processed: ", token_count)
+            
+            # all_gpus_avg_train_loss = None
+            # all_gpus_avg_val_loss = None
+            # every once in a while evaluate the loss on train and val sets
+            if (step  % eval_iters == 0 and step != 0) or step == total_iters - 1:
+                losses = estimate_loss( val_loader, val_data_iterator, ModelArgs.device)
+                # avg_train_loss = losses['train']
+                avg_val_loss = losses['val']
                 # print(f"step {step}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-                # Log training loss more frequently
-                # Aggregate average loss across all GPUs
-            # avg_train_loss = torch.Tensor([losses['train']]).to(device)
-            avg_val_loss = torch.Tensor([losses['val']]).to(device)
-            # torch.distributed.reduce(avg_train_loss, dst=0, op=torch.distributed.ReduceOp.SUM)
-            # torch.distributed.reduce(avg_val_loss, dst=0, op=torch.distributed.ReduceOp.SUM)
-            
-            # if device == 'cuda:0':
-                # all_gpus_avg_train_loss = avg_train_loss / world_size
-                # print(f"All_GPUs_Train_losses: {all_gpus_avg_train_loss.item():.4f}")
-            all_gpus_avg_val_loss = avg_val_loss / world_size
-            print(f"Val Loss: {all_gpus_avg_val_loss.item():.4f}")
-            
-      
-            
-            perplexity = torch.exp(torch.tensor(all_gpus_avg_val_loss.item()))  # Calculate perplexity
-
-            # if device == 0:
-            wandb.log({
-                    "All GPU Val_Loss": all_gpus_avg_val_loss.item(),
-                    "Val Perplexity": perplexity.item(),
-                    "Total Tokens Processed": token_count,
-                    "Step": step,
-                })
-            print(f"Step: {step} | All GPU Val Loss: {all_gpus_avg_val_loss.item():.4f} | Perplexity: {perplexity.item():.4f} | Tokens: {token_count}")
-            
-            
-
-
-        if step % save_checkpoint_iter == 0 and step != 0:
-            print(f"Saving the model checkpoint for step: {step}")
-            _save_snapshot(model, optimizer, None, None, step)
+                # if device == 0:  # Only print on main process
+                print(f"[GPU {ModelArgs.device}] | Step: {step} / {total_iters} | Val Loss: {losses['val']:.4f}")
+                # print(f"[GPU {device}] | Epoch {epoch}/{ModelArgs.epochs}| |Step: {step} | Train Loss: {losses['train']:.4f}")
+                    # print(f"step {step}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+                    # Log training loss more frequently
+                    # Aggregate average loss across all GPUs
+                # avg_train_loss = torch.Tensor([losses['train']]).to(device)
+                avg_val_loss = torch.Tensor([losses['val']]).to(ModelArgs.device)
+                # torch.distributed.reduce(avg_train_loss, dst=0, op=torch.distributed.ReduceOp.SUM)
+                # torch.distributed.reduce(avg_val_loss, dst=0, op=torch.distributed.ReduceOp.SUM)
+                
+                # if device == 'cuda:0':
+                    # all_gpus_avg_train_loss = avg_train_loss / world_size
+                    # print(f"All_GPUs_Train_losses: {all_gpus_avg_train_loss.item():.4f}")
+                # all_gpus_avg_val_loss = avg_val_loss / world_size
+                print(f"Val Loss: {avg_val_loss.item():.4f}")
+                
         
-        accumulated_loss = 0.0
-        
-        
-        optimizer.zero_grad(set_to_none=True)
-        for micro_step in range(gradient_accumulation_steps):
-            try:
-                batch = next(train_data_iterator)
-            except StopIteration:
-                train_data_iterator = iter(train_dataloader)
-                batch = next(train_data_iterator)
+                
+                perplexity = torch.exp(torch.tensor(avg_val_loss.item()))  # Calculate perplexity
 
-            idx = batch['input_ids'].to(device)
+                # if device == 0:
+                wandb.log({
+                        "All GPU Val_Loss": avg_val_loss.item(),
+                        "Val Perplexity": perplexity.item(),
+                        "Total Tokens Processed": token_count,
+                        "Step": step,
+                    })
+                print(f"Step: {step} | All GPU Val Loss: {avg_val_loss.item():.4f} | Perplexity: {perplexity.item():.4f} | Tokens: {token_count}")
+                
+                
 
-            targets = batch['labels'].to(device)
-            token_count += (len(idx) * ModelArgs.batch_size)
-            with torch.autocast(device_type='cuda', dtype=torch.float16):
+
+            if step % save_checkpoint_iter == 0 and step != 0:
+                print(f"Saving the model checkpoint for step: {step}")
+                _save_snapshot(model, optimizer, None, None, step)
+            
+            accumulated_loss = 0.0
+            
+            
+            optimizer.zero_grad(set_to_none=True)
+            for micro_step in range(gradient_accumulation_steps):
+                try:
+                    batch = next(train_data_iterator)
+                except StopIteration:
+                    train_data_iterator = iter(train_dataloader)
+                    batch = next(train_data_iterator)
+
+                idx = batch['input_ids'].to(ModelArgs.device)
+
+                targets = batch['labels'].to(ModelArgs.device)
+                token_count += idx.numel()
+                # with torch.autocast(device_type=ModelArgs.device, dtype=torch.bfloat16):
                 if(ModelArgs.use_liger):
                     loss = model(idx, actual_labels = targets)
                 else:
@@ -1129,111 +1127,103 @@ def train():
                     # print("OK2")
                     loss = nn.functional.cross_entropy(logits, targets, ignore_index=tokenizer.pad_token_id)
                 
-            loss = loss / gradient_accumulation_steps #IDK why div is done here specifically? Maybe think of it in terms of a very big batch being processed and there is need for equal important of each mini batch for the overall big batch
-            accumulated_loss += loss.detach()
-            loss.backward() 
-        # model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1) # so that we dont synchronize the gradient everytime across the GPU devices
-        # scaler.scale(loss).backward()
-        # Check for unused parameters
-    # del logits, targets, loss
-    
-
-        unused_params = find_unused_parameters(model)
-        if unused_params:
-            print(f"Unused parameters: {unused_params}")
-    # break
-
-        # if(device == 0):
-            # if(micro_step % 10 == 0):
-        #     if(step == train_loader_length):
-        #       break
-                
-            # print("Micro Batch : ", micro_step)
-        print("Step : ", step, "/", total_iters)
-            # print('Total batches: ', len(train_dataloader))
-            # print("Total gradient accumulation steps: ", gradient_accumulation_steps)
-        print("Total tokens processed: ", token_count)
-        # count += 1
-       
-        # lr = cyclical_lr(step)
-        # for params in optimizer.param_groups:
-        #     params['lr'] = lr
+                loss = loss / gradient_accumulation_steps #IDK why div is done here specifically? Maybe think of it in terms of a very big batch being processed and there is need for equal important of each mini batch for the overall big batch
+                accumulated_loss += loss.item()
+                # scaler.scale(loss).backward()
+                loss.backward() 
+            # model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1) # so that we dont synchronize the gradient everytime across the GPU devices
             
+            # Check for unused parameters
+        # del logits, targets, loss
         
-        
-        # Compute gradient norms before clipping
-        if(ModelArgs.clip != 0.0):
-            
-            # scaler.unscale_(optimizer) #To avoid underflow
-            total_norm_before = torch.norm(
-                torch.stack([torch.norm(p.grad.detach(), 2) for p in model.parameters() if p.grad is not None]), 2
-            )
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=ModelArgs.clip)
-
-            # Compute gradient norms after clipping
-            total_norm_after = torch.norm(
-                torch.stack([torch.norm(p.grad.detach(), 2) for p in model.parameters() if p.grad is not None]), 2
-            )
-            
-            if(step !=0):
-                print(f"Gradient Norm Before Clipping: {total_norm_before.item():.4f}")
-                print(f"Gradient Norm After Clipping: {total_norm_after.item():.4f}")
-        
-        # Compute gradient norms for each parameter
-        # for name, param in model.named_parameters():
-        #     if param.grad is not None:
-        #         grad_norm = param.grad.norm().item()
-        #         print(f"Gradient norm for {name}: {grad_norm}")
-        optimizer.step()
-        # scaler.step(optimizer)
-        # scaler.update()
-        # torch.cuda.empty_cache()
-        # optimizer.step()
-        scheduler.step()
-        # torch.cuda.empty_cache()
-        torch.cuda.synchronize() 
-        # accumulated_loss = loss
-        
-        # torch.distributed.reduce(loss, dst=0, op=torch.distributed.ReduceOp.SUM)
-        # loss /= world_size
-        perplexity = torch.exp(torch.tensor(accumulated_loss.item()))  # Calculate perplexity
-        # if(device == 0):
-        wandb.log({
-                    "Learning Rate": scheduler.get_last_lr()[0],
-                    "Train_Loss": accumulated_loss.item(),
-                    # "Train loss": loss.item(),
-                    "Train Perplexity": perplexity.item(),
-                    "Total Tokens Processed": token_count,
-                    "Step": step,
-                    "Gradient Norm": total_norm_before.item(),
-                    # "Epoch": epoch
-                    
-        })
-
-
-        if step % 200 == 0:
-            count = 1
-            while(count):  
-                prompt = "Hello! Myself an AI Assistant and "
-                generated_text = topk_sampling(model, prompt, max_length=ModelArgs.block_size, top_k=50, temperature=1.0, device=device)
-    
-     
-                print(f" Step: {step} | Generated Text: {generated_text}")
-
-                save_to_file(step, generated_text)
-                count -= 1
-        
-    
-
+            unused_params = find_unused_parameters(model)
+            if unused_params:
+                print(f"Unused parameters: {unused_params}")
         # break
-        # if step % 5 == 0:
-        #     torch.cuda.empty_cache()
-    # Cleanup
-    # if device == 0:
-        # writer.close()
+
+            # if(device == 0):
+                # if(micro_step % 10 == 0):
+            #     if(step == train_loader_length):
+            #       break
+                    
+                # print("Micro Batch : ", micro_step)
+            print("Step : ", step, "/", total_iters)
+                # print('Total batches: ', len(train_dataloader))
+                # print("Total gradient accumulation steps: ", gradient_accumulation_steps)
+            print("Total tokens processed: ", token_count)
+            # count += 1
+        
+            # lr = cyclical_lr(step)
+            # for params in optimizer.param_groups:
+            #     params['lr'] = lr
+                
+            
+            
+            # Compute gradient norms before clipping
+            if(ModelArgs.clip != 0.0):
+                
+                # scaler.unscale_(optimizer) #To avoid underflow
+                total_norm_before = torch.norm(
+                    torch.stack([torch.norm(p.grad.detach(), 2) for p in model.parameters() if p.grad is not None]), 2
+                )
+
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=ModelArgs.clip)
+
+                # Compute gradient norms after clipping
+                total_norm_after = torch.norm(
+                    torch.stack([torch.norm(p.grad.detach(), 2) for p in model.parameters() if p.grad is not None]), 2
+                )
+                
+                if(step !=0):
+                    print(f"Gradient Norm Before Clipping: {total_norm_before.item():.4f}")
+                    print(f"Gradient Norm After Clipping: {total_norm_after.item():.4f}")
+            
+            optimizer.step()
+            scheduler.step()
+            # torch.cuda.empty_cache()
+            torch.cuda.synchronize() 
+            # accumulated_loss = loss
+            
+            # torch.distributed.reduce(loss, dst=0, op=torch.distributed.ReduceOp.SUM)
+            # loss /= world_size
+            perplexity = torch.exp(torch.tensor(accumulated_loss)))  # Calculate perplexity
+            # if(device == 0):
+            wandb.log({
+                        "Learning Rate": scheduler.get_last_lr()[0],
+                        "Train_Loss": accumulated_loss,
+                        # "Train loss": loss.item(),
+                        "Train Perplexity": perplexity.item(),
+                        "Total Tokens Processed": token_count,
+                        "Step": step,
+                        "Gradient Norm": total_norm_before.item(),
+                        # "Epoch": epoch
+                        
+            })
+
+            accumulated_loss = 0.0
+            if step % 200 == 0:
+                count = 1
+                while(count):  
+                    prompt = "Once upon a time "
+                    generated_text = topk_sampling(model, prompt, max_length=ModelArgs.block_size, top_k=50, temperature=1.0, device=ModelArgs.device)
+        
+        
+                    print(f" Step: {step} | Generated Text: {generated_text}")
+
+                    save_to_file(step, generated_text)
+                    count -= 1
+            
+        
+
+            # break
+            # if step % 5 == 0:
+            #     torch.cuda.empty_cache()
+        # Cleanup
+        # if device == 0:
+            # writer.close()
     wandb.finish()
-    cleanup()
+    # cleanup()
 
 
 world_size = torch.cuda.device_count()
