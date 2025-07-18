@@ -84,7 +84,7 @@ def test_tokenizer_with_hf_token():
 
 def main():
     """Run all tests"""
-    print("🚀 Starting StoryMixtral tokenizer tests...\n")
+    print("🚀 Starting SmolMixtral tokenizer tests...\n")
     
     tests = [
         test_tokenizer_basic,

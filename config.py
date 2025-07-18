@@ -13,7 +13,7 @@ torch.cuda.manual_seed(1337)
 DEFAULT_TOKEN = '...'
 
 def get_args():
-    parser = argparse.ArgumentParser(description='StoryMixtral - Mixtral Inspired Model Training')
+    parser = argparse.ArgumentParser(description='SmolMixtral - Mixtral Inspired Model Training')
     
     # Model Architecture
     parser.add_argument('--block_size', type=int, default=1024, help='Maximum sequence length')
