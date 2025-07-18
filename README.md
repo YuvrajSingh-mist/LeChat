@@ -1,20 +1,23 @@
 
-# StoryMixtral - Mixtral Inspired Model
+# SmolMixtral - Mixtral Inspired Model
 
 A PyTorch implementation of a Mixtral inspired transformer model with Mixture of Experts (MoE), designed for text generation and understanding tasks. This model is built on the Mixtral architecture with enhancements like Flash Attention, SWiGLU activation, and Liger kernels for optimized performance.
+
+- So, I trained a MoE based a 124M (8x12M) architecture I coded from ground up.
+- Trained on TinyStories dataset from HuggingFace consisting of 1M texts for a total of 14000 steps
 
 ## Examples
 
 Provided under the `generated_data/` directory, these examples showcase the model's capabilities in text generation and understanding.
 
-![StoryMixtral Model](images/image.png)
+![SmolMixtral Model](images/image.png)
 
 ## 📊 Training Results & Model Weights
 
-**📈 View Training Report**: [StoryMixtral Training Results on WandB](https://wandb.ai/rentio/Mixtral-DDP-Pretrain-10-billion-tokens/reports/StoryMixtral--VmlldzoxMzYyNzc0OQ?accessToken=nybd4lxybsbq5k5fh2dqjcucdawilt3fossn583wv6jiu8tbdzcybiihe7rhsqmq)
+**📈 View Training Report**: [SmolMixtral Training Results on WandB](https://wandb.ai/rentio/Mixtral-DDP-Pretrain-10-billion-tokens/reports/SmolMixtral--VmlldzoxMzYyNzc0OQ?accessToken=nybd4lxybsbq5k5fh2dqjcucdawilt3fossn583wv6jiu8tbdzcybiihe7rhsqmq)
 
 **💾 Download Pre-trained Weights**: 
-- **Hugging Face Model**: [YuvrajSingh9886/StoryMixtral](https://huggingface.co/YuvrajSingh9886/StoryMixtral)
+- **Hugging Face Model**: [YuvrajSingh9886/SmolMixtral](https://huggingface.co/YuvrajSingh9886/SmolMixtral)
 - **WandB Checkpoints**: Check the WandB report above for additional trained model checkpoints
 
 ## Features
@@ -101,7 +104,7 @@ Since this model uses the Llama-2 tokenizer, you'll need a Hugging Face token to
 ### Using Pre-trained Weights
 
 1. **Download Model Weights**: 
-   - **Option 1**: Download from [Hugging Face - YuvrajSingh9886/StoryMixtral](https://huggingface.co/YuvrajSingh9886/StoryMixtral)
+   - **Option 1**: Download from [Hugging Face - YuvrajSingh9886/SmolMixtral](https://huggingface.co/YuvrajSingh9886/SmolMixtral)
    - **Option 2**: Visit the [WandB Training Report](https://wandb.ai/rentio/Mixtral-DDP-Pretrain-10-billion-tokens) for additional checkpoints
    - Place downloaded files in the `checkpoints/` directory
 
@@ -165,7 +168,7 @@ python app.py
 ## File Structure
 
 ```
-StoryMixtral/
+SmolMixtral/
 ├── config.py          # Model configuration and hyperparameters
 ├── model.py           # Model architecture (Mixtral, MoE, Attention, etc.)
 ├── data.py           # Data loading and preparation
